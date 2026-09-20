@@ -148,3 +148,15 @@
 - 本轮收起交互实现、原生验收边界与真实 15 次 API 比较统一见 [对应 Delta](../deltas/reading_popup_dismissal_and_model_latency/PRD.md) 和 [TEST](../deltas/reading_popup_dismissal_and_model_latency/TEST.md)；本行仅导航。
 
 - 用户确认换边可用后授权保存当前版本到个人私有 GitHub；首次 Git 快照的远端与执行绑定见 [Delta 索引](../deltas/INDEX.md#个人-github-快照绑定2026-09-20)，原始私有证据保留本机。
+
+## 2026-09-20 菜单栏常驻
+
+- 移除 Dock 图标的实现与验收统一见 [menu_bar_app Delta](../deltas/menu_bar_app/PRD.md)。窗口视觉重做当前仅讨论。
+
+## 2026-09-20 纸感视觉重构
+
+- 用户随后授权按纸感颜料Skill重做真实UI，浅暗主题的当前需求与验证见 [paper_reading_ui Delta](../deltas/paper_reading_ui/PRD.md)。
+
+## 2026-09-20 精确词条复用
+
+- 当前行为变更、旧记录清理与验证统一见 [wordbook_exact_cache Delta](../deltas/wordbook_exact_cache/PRD.md)。

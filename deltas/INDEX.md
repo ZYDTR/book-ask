@@ -4,11 +4,16 @@
 
 | Delta | 状态 | 文档 | 唯一下一步 |
 | --- | --- | --- | --- |
+| `wordbook_exact_cache`：精确词条复用与清理 | 已安装；词本已清理，零请求回归通过 | [PRD](wordbook_exact_cache/PRD.md) · [RFC](wordbook_exact_cache/RFC.md) · [TEST](wordbook_exact_cache/TEST.md) | 等待真实Books重复划词核对；权限已恢复，当前二进制8189ef9d…。 |
+| `paper_reading_ui`：纸感颜料界面重构 | 暗色已安装；主题/词本/重启通过，权限已恢复 | [PRD](paper_reading_ui/PRD.md) · [TEST](paper_reading_ui/TEST.md) | 本包真实划词待验证；权限与Books监听已恢复。当前二进制d1bb424b…。 |
+| `menu_bar_app`：菜单栏常驻，移除 Dock 图标 | 已并入纸感版；原权限已恢复、输入/词本通过 | [需求 / 实现 / 验证](menu_bar_app/PRD.md) | 后续运行验收跟随paper_reading_ui，不重复建立验证记录。 |
 | `reading_popup_dismissal_and_model_latency`：收起、划词反侧定位与模型比较 | 已安装；用户确认换边可用，日志核对两方向/Books点击/后台回答通过；测速完成 | [PRD](reading_popup_dismissal_and_model_latency/PRD.md) · [RFC](reading_popup_dismissal_and_model_latency/RFC.md) · [TEST](reading_popup_dismissal_and_model_latency/TEST.md) | 当前二进制9ecd66c8…；GitHub快照绑定见下节，TEST保留全屏/多屏等未覆盖边界。 |
 | `reading_panel_top_right`：划词窗口固定右上角 | 已安装，启动/显式显示定位验证通过 | [PRD / 实施与验证](reading_panel_top_right/PRD.md) | 用户按日常阅读确认位置；模型列表已核对，保持 Gemini 3.7 Flash。 |
 | `books_selection_copy_and_focus`：Books 自动复制取词与窗口前置 | 已安装；09-20 用户确认体验已很好，部分自动化全屏/竞态项目仍未覆盖 | [PRD](books_selection_copy_and_focus/PRD.md) · [RFC](books_selection_copy_and_focus/RFC.md) · [TEST](books_selection_copy_and_focus/TEST.md) | 保留未覆盖项的原记录；本轮新需求见右上角窗口 Delta。 |
 
 ## 当前执行绑定：books_selection_copy_and_focus
+
+最新 `menu_bar_app` 执行绑定：代码/控制面均为 `/Users/zhengyidi/yage/context-infrastructure/adhoc_jobs/book_ask`，沿用当前工作目录，branch main，baseline HEAD `8ea90000d3645d14e0de0221b8bd159c66087dec`，开始时工作区干净。仅本地更新安装应用及本增量文件，验收结果见该 Delta；下表为历史取词任务基线。
 
 | 项目 | 已核实值 |
 | --- | --- |
@@ -76,3 +81,17 @@
 这是首次提交整个当前项目：源代码、脚本、测试和同仓脚手架/Delta文档作为版本快照；书籍、配置/凭据、用户词本、原始日志、应用备份与构建产物均排除。此前各节的 unborn/无远端是历史基线，不再代表推送后的状态。当前 Git SHA 用 `git rev-parse HEAD`、远端用 `git rev-parse origin/main` 核验；安装二进制哈希仍独立记录，不充当 commit SHA。
 
 preflight 与最终提交/远端一致性回执保存在本机 `evidence/github_push_20260920/`。本次按用户已接受的当前版本做私人版本保存；TEST 中没有实测的全屏/多显示器项目仍明确保留，不扩展验收结论。
+
+## paper_reading_ui 执行绑定
+
+控制面与代码目录 `/Users/zhengyidi/yage/context-infrastructure/adhoc_jobs/book_ask`，当前工作目录/main，HEAD `8ea90000d3645d14e0de0221b8bd159c66087dec`。进入时保留 menu_bar_app 尚未提交的 README/索引/working/Info.plist生成/启动策略改动和对应Delta；不创建worktree、不撤销旧改动。完整修改前副本、diff与安装包在 `evidence/paper_ui_20260920/`。视觉按用户指定Skill执行，最终结果回写本Delta TEST；未自动授权新一轮Git推送。
+
+暗色续增量绑定：2026-09-20，同一目录/main/HEAD 8ea90000…；进入时保留浅色重构和Dock改动。dd14c629…安装包及修改前源码位于 `evidence/paper_dark_20260920/`。默认跟随系统，菜单三态切换，验证与未覆盖边界统一见paper_reading_ui TEST；未提交或推送。
+
+## wordbook_exact_cache 执行绑定
+
+2026-09-20，控制面/代码/工作目录均为 `/Users/zhengyidi/yage/context-infrastructure/adhoc_jobs/book_ask`，main，HEAD `8ea90000d3645d14e0de0221b8bd159c66087dec`。保留既有Dock/浅暗UI全部dirty改动；安装基线d1bb424b…，源码/旧包/历史备份在evidence/wordbook_exact_cache_20260920。没有新建worktree或派发Agent；本轮不提交/推送。
+
+## 第二次Git快照授权（2026-09-20）
+
+用户接受当前8189ef9d…版本并明确要求先推送，再实施同窗词本。当前目录/main，对端仍为个人私有 `ZYDTR/book-ask`，fetch后未落后origin/main；本次快照包括已确认的菜单栏、浅暗纸面、精确词条缓存、相应测试及同仓Delta导航。书籍/本地词本/凭据/原始证据不入Git。现有测试与构建结果绑定当前源码，无后续代码变更；最新未覆盖边界保留在TEST。推送回执位于evidence/github_push_20260920_v2。

@@ -7,6 +7,8 @@
 本 README 是 book_ask 的需求控制面入口，控制面与代码仓库均位于本目录，局部约束见 [AGENTS.md](AGENTS.md)。已有脚手架继续使用，不重新建项目。
 
 - 唯一增量需求索引：[deltas/INDEX.md](deltas/INDEX.md)。需求状态、代码基线和下一步以该索引为准。
+- 当前视觉重构：[纸感颜料阅读界面](deltas/paper_reading_ui/PRD.md)。
+- 当前增量：[菜单栏常驻，移除 Dock 图标](deltas/menu_bar_app/PRD.md)。
 - 最新 Delta：[收起、划词反侧定位与模型比较](deltas/reading_popup_dismissal_and_model_latency/PRD.md)（已实现外部点击/15秒勾选收起、按鼠标松开位置反侧显示，用户确认换边可用；验收边界与真实 API 测速见其 TEST）；已有 [划词解释窗口固定在右上角](deltas/reading_panel_top_right/PRD.md) 与 [Books 自动复制取词与窗口前置](deltas/books_selection_copy_and_focus/PRD.md) 保留为历史增量，执行状态统一见索引。
 - 既有长期文档仍在原位：[产品](docs/prd.md)、[架构](docs/rfc.md)、[测试](docs/test.md)、[提示词](docs/prompts.md)、[诊断](docs/diagnostics.md)。本次未回灌新的产品或技术结论；与当前代码或新要求的差异在 Delta 中说明。
 - [docs/working.md](docs/working.md) 保留已有实施记录和 Lessons Learned；当前 Delta 的方案与验证只写入其 PRD/RFC/TEST，避免产生第二套状态。

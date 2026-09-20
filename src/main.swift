@@ -41,9 +41,20 @@ final class BookAsk: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSTex
     var promptHeight: NSLayoutConstraint!
     var promptDisclosure: NSButton!
     var wordbook: WordbookWindow?
+    var wordbookLibrary = WordbookLibrary.shared
+    var lookupTask: Task<Void, Never>?
+    var wordbookReady = false
+    var currentWordbookEntry: WordbookEntry?
+    var modelSession = URLSession.shared
+    // Injectable I/O boundaries let request-count tests use isolated storage and
+    // a local URLProtocol without showing windows or writing personal history.
+    var configurationLoader: () throws -> Configuration = Configuration.load
+    var recordSink: (([String: Any]) -> Void)?
+    var windowPresenter: ((String) -> Void)?
     var promptExpanded = false
     var statusItem: NSStatusItem!
     var automaticMenu: NSMenuItem!
+    var appearanceMenuItems: [NSMenuItem] = []
     var captureTimer: Timer?
     var autoExplain = ReadingPreferences.automatic
     var activeRequestIsAutomatic = false
@@ -94,10 +105,14 @@ final class BookAsk: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSTex
         buildMenu()
         buildWindow()
         panelController.startMonitoring()
-        record(["event": "window_policy", "level": panel.level.rawValue,
-                "joinsAllSpaces": panel.collectionBehavior.contains(.canJoinAllSpaces)])
+        record(["event": "window_policy", "activationPolicy": NSApp.activationPolicy().rawValue,
+                "isUIElement": Bundle.main.object(forInfoDictionaryKey: "LSUIElement") as? Bool ?? false,
+                "level": panel.level.rawValue,
+                "joinsAllSpaces": panel.collectionBehavior.contains(.canJoinAllSpaces),
+                "appearance": ReadingPreferences.appearance().rawValue,
+                "darkPaper": PaperTheme.isDark(panel.effectiveAppearance)])
         do {
-            config = try Configuration.load()
+            config = try configurationLoader()
             if let key = try? config?.credential() { DiagnosticLog.shared.registerSecret(key) }
             status.stringValue = AXIsProcessTrusted() ? readyStatus : "首次使用：从菜单栏打开「授权划词」"
         } catch {
@@ -188,6 +203,7 @@ final class BookAsk: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSTex
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "显示读书提问", action: #selector(openWindow), keyEquivalent: "0").target = self
         appMenu.addItem(withTitle: "词本", action: #selector(openWordbook), keyEquivalent: "b").target = self
+        appMenu.addItem(makeAppearanceMenu())
         appMenu.addItem(withTitle: "记录划词问题并打开日志", action: #selector(reportSelectionIssue), keyEquivalent: "").target = self
         appMenu.addItem(withTitle: "授权划词", action: #selector(requestAccessibility), keyEquivalent: "").target = self
         appMenu.addItem(.separator())
@@ -208,127 +224,30 @@ final class BookAsk: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSTex
         autoExplain ? "划选后自动解释 · 可继续追问" : "划选后仅显示原文 · 回车或发送可提问"
     }
 
-    func buildWindow() {
-        panel = AskPanel(contentRect: NSRect(x: 0, y: 0, width: 500, height: 511),
-                        styleMask: [.titled, .closable, .resizable, .miniaturizable, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.title = "读书提问"
-        panel.isReleasedWhenClosed = false
-        panel.minSize = NSSize(width: 500, height: 539)
-        panel.level = .normal
-        panel.hidesOnDeactivate = false
-        panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary, .canJoinAllApplications]
-        panel.setFrameAutosaveName("BookAskPanel")
-        panel.setFrameUsingName("BookAskPanel")
-        // Restore the display choice, then keep the user's default outer size.
-        // showWindow uses the selection's frozen mouse-up side, or top-right
-        // when there is no mouse selection (launch and service entry).
-        panel.setFrame(NSRect(origin: panel.frame.origin, size: NSSize(width: 500, height: 539)), display: false)
-        let content = NSView()
-        panel.contentView = content
-        panelController = ReadingPanelController(panel: panel, automaticDismissal: ReadingPreferences.autoDismiss,
-            record: { [weak self] fields in self?.record(fields) })
-
-        automaticButton = NSButton(checkboxWithTitle: "自动解释", target: self, action: #selector(toggleAutomatic))
-        automaticButton.state = autoExplain ? .on : .off
-        autoDismissButton = NSButton(checkboxWithTitle: "15 秒后自动收起", target: self, action: #selector(toggleAutoDismiss))
-        autoDismissButton.font = .systemFont(ofSize: 11)
-        autoDismissButton.state = ReadingPreferences.autoDismiss ? .on : .off
-        autoDismissButton.toolTip = "查词弹出 15 秒后收起；在窗口内点击、输入或滚动会取消本次计时"
-        promptDisclosure = NSButton(title: "编辑提示词", target: self, action: #selector(togglePromptEditor))
-        promptDisclosure.bezelStyle = .inline
-        promptDisclosure.font = .systemFont(ofSize: 11)
-        promptDisclosure.image = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)
-        promptDisclosure.imagePosition = .imageTrailing
-        promptDisclosure.toolTip = "编辑后自动保存"
-        let wordbookButton = NSButton(title: "词本", target: self, action: #selector(openWordbook))
-        wordbookButton.bezelStyle = .inline
-        wordbookButton.image = NSImage(systemSymbolName: "book.closed", accessibilityDescription: nil)
-        wordbookButton.imagePosition = .imageLeading
-        wordbookButton.toolTip = "查看已保存的词句与解释"
-        let (editorScroll, editor) = ReadingTextArea.make(font: .systemFont(ofSize: 12), height: 100)
-        promptScroll = editorScroll
-        promptEditor = editor
-        editor.isEditable = true
-        editor.isRichText = false
-        editor.allowsUndo = true
-        editor.string = ReadingPreferences.prompt
-        editor.setAccessibilityLabel("自动解释提示词")
-        editor.delegate = self
-        promptScroll.wantsLayer = true
-        promptScroll.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-        promptScroll.layer?.cornerRadius = 6
-        promptScroll.isHidden = true
-        promptHeight = promptScroll.heightAnchor.constraint(equalToConstant: 0)
-
-        contextLabel = NSTextField(labelWithString: "在图书中划选，无需复制")
-        contextLabel.font = .systemFont(ofSize: 11)
-        contextLabel.textColor = .secondaryLabelColor
-        contextLabel.lineBreakMode = .byTruncatingTail
-        let (quoteScroll, quoteView) = ReadingTextArea.make(font: .systemFont(ofSize: 15), height: 63)
-        quote = quoteView
-        quote.setAccessibilityLabel("选中的原文")
-        quote.string = "在 Mac 图书中选中词语或句子，即可在这里理解和追问。"
-        let line = NSBox()
-        line.boxType = .separator
-        let (chatScroll, chatView) = ReadingTextArea.make(font: .systemFont(ofSize: 15), height: 210)
-        transcript = chatView
-        transcript.setAccessibilityLabel("AI 回答与对话")
-        question = NSTextField()
-        question.placeholderString = "继续提问… 留空可发送上方提示词"
-        question.font = .systemFont(ofSize: 14)
-        question.delegate = self
-        question.target = self
-        question.action = #selector(sendQuestion)
-        question.setAccessibilityLabel("继续提问")
-        sendButton = NSButton(title: "发送", target: self, action: #selector(sendOrStop))
-        let input = NSStackView(views: [question, sendButton])
-        input.orientation = .horizontal
-        input.spacing = 8
-        question.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        status = NSTextField(labelWithString: "准备就绪")
-        status.font = .systemFont(ofSize: 10)
-        status.textColor = .secondaryLabelColor
-        status.lineBreakMode = .byTruncatingTail
-        for view in [automaticButton!, autoDismissButton!, wordbookButton, promptDisclosure!, promptScroll!, contextLabel!, quoteScroll, line, chatScroll, input, status!] {
-            view.translatesAutoresizingMaskIntoConstraints = false
-            content.addSubview(view)
+    func makeAppearanceMenu() -> NSMenuItem {
+        let item = NSMenuItem(title: "外观", action: nil, keyEquivalent: "")
+        let menu = NSMenu(title: "外观")
+        for choice in ReadingAppearance.allCases {
+            let option = menu.addItem(withTitle: choice.title, action: #selector(changeAppearance(_:)), keyEquivalent: "")
+            option.target = self
+            option.representedObject = choice.rawValue
+            option.state = ReadingPreferences.appearance() == choice ? .on : .off
+            appearanceMenuItems.append(option)
         }
-        NSLayoutConstraint.activate([
-            automaticButton.topAnchor.constraint(equalTo: content.topAnchor, constant: 12),
-            automaticButton.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
-            autoDismissButton.centerYAnchor.constraint(equalTo: automaticButton.centerYAnchor),
-            autoDismissButton.leadingAnchor.constraint(equalTo: automaticButton.trailingAnchor, constant: 12),
-            promptDisclosure.centerYAnchor.constraint(equalTo: automaticButton.centerYAnchor),
-            promptDisclosure.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
-            wordbookButton.centerYAnchor.constraint(equalTo: automaticButton.centerYAnchor),
-            wordbookButton.trailingAnchor.constraint(equalTo: promptDisclosure.leadingAnchor, constant: -16),
-            wordbookButton.leadingAnchor.constraint(greaterThanOrEqualTo: autoDismissButton.trailingAnchor, constant: 12),
-            promptScroll.topAnchor.constraint(equalTo: automaticButton.bottomAnchor, constant: 7),
-            promptScroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
-            promptScroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
-            promptHeight,
-            contextLabel.topAnchor.constraint(equalTo: promptScroll.bottomAnchor, constant: 9),
-            contextLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
-            contextLabel.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
-            quoteScroll.topAnchor.constraint(equalTo: contextLabel.bottomAnchor, constant: 2),
-            quoteScroll.leadingAnchor.constraint(equalTo: promptScroll.leadingAnchor),
-            quoteScroll.trailingAnchor.constraint(equalTo: promptScroll.trailingAnchor),
-            quoteScroll.heightAnchor.constraint(equalToConstant: 63),
-            line.topAnchor.constraint(equalTo: quoteScroll.bottomAnchor, constant: 5),
-            line.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
-            line.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
-            chatScroll.topAnchor.constraint(equalTo: line.bottomAnchor, constant: 5),
-            chatScroll.leadingAnchor.constraint(equalTo: promptScroll.leadingAnchor),
-            chatScroll.trailingAnchor.constraint(equalTo: promptScroll.trailingAnchor),
-            chatScroll.bottomAnchor.constraint(equalTo: input.topAnchor, constant: -8),
-            input.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
-            input.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
-            input.bottomAnchor.constraint(equalTo: status.topAnchor, constant: -7),
-            question.heightAnchor.constraint(greaterThanOrEqualToConstant: 30),
-            status.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
-            status.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
-            status.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -10)
-        ])
+        item.submenu = menu
+        return item
+    }
+
+    @objc func changeAppearance(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let choice = ReadingAppearance(rawValue: raw) else { return }
+        ReadingPreferences.setAppearance(choice)
+        for item in appearanceMenuItems {
+            item.state = item.representedObject as? String == raw ? .on : .off
+        }
+        PaperTheme.apply(choice, to: panel)
+        if let window = wordbook?.window { PaperTheme.apply(choice, to: window) }
+        record(["event": "appearance_changed", "appearance": raw,
+                "darkPaper": PaperTheme.isDark(panel.effectiveAppearance)])
     }
 
     func buildStatusItem() {
@@ -338,6 +257,7 @@ final class BookAsk: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSTex
         let menu = NSMenu()
         menu.addItem(withTitle: "显示读书提问", action: #selector(openWindow), keyEquivalent: "").target = self
         menu.addItem(withTitle: "词本", action: #selector(openWordbook), keyEquivalent: "").target = self
+        menu.addItem(makeAppearanceMenu())
         menu.addItem(withTitle: "记录划词问题并打开日志", action: #selector(reportSelectionIssue), keyEquivalent: "").target = self
         automaticMenu = NSMenuItem(title: "自动解释", action: #selector(toggleAutomatic), keyEquivalent: "")
         automaticMenu.target = self
@@ -390,7 +310,8 @@ final class BookAsk: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSTex
         promptScroll.isHidden = !promptExpanded
         promptHeight.constant = promptExpanded ? 100 : 0
         promptDisclosure.title = promptExpanded ? "收起提示词" : "编辑提示词"
-        promptDisclosure.image = NSImage(systemSymbolName: promptExpanded ? "chevron.down" : "chevron.right", accessibilityDescription: nil)
+        (promptDisclosure as? PaperButton)?.symbol = promptExpanded ? "chevron.up" : "slider.horizontal.3"
+        promptDisclosure.setAccessibilityLabel(promptDisclosure.title)
         panel.contentView?.layoutSubtreeIfNeeded()
         panel.makeFirstResponder(promptExpanded ? promptEditor : question)
     }
@@ -691,13 +612,14 @@ final class BookAsk: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSTex
 
     @objc func openWindow() { showWindow(reason: "explicit_open") }
     @objc func openWordbook() {
-        if wordbook == nil { wordbook = WordbookWindow(fallbackBook: config?.bookTitle ?? "图书") }
+        if wordbook == nil { wordbook = WordbookWindow(fallbackBook: config?.bookTitle ?? "图书", library: wordbookLibrary) }
         wordbook?.open()
     }
     /// Fronts the panel. Per the window contract this may only happen for a genuine
     /// new selection or an explicit user open — never from streaming, polling,
     /// answer-completion or capture-failure paths, which is why `reason` is logged.
     func showWindow(reason: String) {
+        if let windowPresenter { windowPresenter(reason); return }
         if panel.isMiniaturized { panel.deminiaturize(nil) }
         let selectedScreen = currentPlacement?.displayID.flatMap { id in
             NSScreen.screens.first { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == id }
@@ -731,10 +653,19 @@ final class BookAsk: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSTex
     }
 
     func receive(_ text: String, sampleID: String, placement: ReadingPanelPlacement? = nil) {
+        let term = WordbookStore.key(text)
+        if term == selectedText, !term.isEmpty,
+           activeTask != nil || lookupTask != nil || currentWordbookEntry?.hasAnswer == true {
+            currentPlacement = placement
+            showWindow(reason: "repeat_selection")
+            return
+        }
         stop()
+        wordbookReady = false
+        currentWordbookEntry = nil
         currentPlacement = placement
         currentSampleID = sampleID
-        selectedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        selectedText = term
         guard selectedText.count <= 6000 else {
             showWindow(reason: "new_selection")
             status.stringValue = "选区较长，请选择 6000 字符以内的一小段。"
@@ -746,10 +677,11 @@ final class BookAsk: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSTex
         messages = []
         displayHistory = ""
         quote.string = selectedText
+        quote.scrollToBeginningOfDocument(nil)
         transcript.string = ""
         question.stringValue = ""
         do {
-            config = try Configuration.load()
+            config = try configurationLoader()
             guard let config else { return }
             let paragraphs = try JSONDecoder().decode([BookParagraph].self, from: Data(contentsOf: URL(fileURLWithPath: config.contextFile)))
             context = ReadingContext.match(selectedText, in: paragraphs)
@@ -760,12 +692,51 @@ final class BookAsk: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSTex
         }
         record(["event": "selection_received", "selection": selectedText, "bookTitle": config?.bookTitle ?? "图书", "contextIDs": context.paragraphs.map(\.id)])
         showWindow(reason: "new_selection")
-        status.stringValue = "选区已就绪 · 输入问题或留空发送模板"
-        if autoExplain {
-            let prompt = promptEditor.string.trimmingCharacters(in: .whitespacesAndNewlines)
-            if prompt.isEmpty { status.stringValue = "选区已就绪 · 请先填写上方提示词" }
-            else { ask(prompt, automatic: true) }
+        resolveWordbook()
+    }
+
+    func resolveWordbook() {
+        guard lookupTask == nil, !selectedText.isEmpty else { return }
+        let generation = UUID(); activeGeneration = generation
+        let term = selectedText, book = config?.bookTitle ?? "图书"
+        status.stringValue = "正在读取词本…"
+        lookupTask = Task { @MainActor in
+            do {
+                let entry = try await wordbookLibrary.select(term, book: book, time: ISO8601DateFormatter().string(from: Date()))
+                guard generation == activeGeneration, !Task.isCancelled else { return }
+                currentWordbookEntry = entry
+                wordbookReady = true; lookupTask = nil
+                wordbook?.reload()
+                if entry.hasAnswer {
+                    restoreWordbook(entry)
+                    record(["event": "wordbook_cache_hit", "selection": term, "sourceBook": entry.book,
+                            "exchangeCount": entry.exchanges.count, "modelRequested": false])
+                } else {
+                    record(["event": "wordbook_cache_miss", "selection": term, "reason": "no_complete_answer"])
+                    status.stringValue = "选区已就绪 · 输入问题或留空发送模板"
+                    if autoExplain {
+                        let prompt = promptEditor.string.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if prompt.isEmpty { status.stringValue = "选区已就绪 · 请先填写上方提示词" }
+                        else { ask(prompt, automatic: true) }
+                    }
+                }
+            } catch {
+                guard generation == activeGeneration else { return }
+                lookupTask = nil
+                status.stringValue = "词本读取失败 · 点击发送重试读取"
+                transcript.string = "暂时无法读取本地词本，已保留原文件。"
+                record(["event": "wordbook_read_failed", "message": error.localizedDescription])
+            }
         }
+    }
+
+    func restoreWordbook(_ entry: WordbookEntry) {
+        messages = entry.conversation
+        displayHistory = entry.displayText
+        transcript.string = displayHistory
+        transcript.scrollToBeginningOfDocument(nil)
+        contextLabel.stringValue = "词本 · 原解释来自\(entry.book)"
+        status.stringValue = "已从词本读取 · 可继续追问"
     }
 
     @objc func sendOrStop() {
@@ -776,19 +747,26 @@ final class BookAsk: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSTex
 
     @objc func sendQuestion() {
         panelController.userInteracted()
-        guard activeTask == nil, !selectedText.isEmpty else { return }
+        guard activeTask == nil, lookupTask == nil, !selectedText.isEmpty else { return }
+        guard wordbookReady else { resolveWordbook(); return }
         let value = question.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.isEmpty, let entry = currentWordbookEntry, entry.hasAnswer {
+            restoreWordbook(entry)
+            record(["event": "wordbook_cache_hit", "selection": selectedText, "reason": "empty_send", "modelRequested": false])
+            return
+        }
         let prompt = value.isEmpty ? promptEditor.string.trimmingCharacters(in: .whitespacesAndNewlines) : value
         guard !prompt.isEmpty else {
             status.stringValue = "请填写问题或上方提示词"
             return
         }
         question.stringValue = ""
-        ask(prompt)
+        ask(prompt, automatic: value.isEmpty)
     }
     @objc func stop() {
         let wasActive = activeTask != nil
         activeGeneration = UUID()
+        lookupTask?.cancel(); lookupTask = nil
         activeTask?.cancel()
         activeTask = nil
         activeRequestIsAutomatic = false
@@ -806,6 +784,10 @@ final class BookAsk: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSTex
 
     func ask(_ prompt: String, automatic: Bool = false) {
         guard activeTask == nil, !selectedText.isEmpty, let config else { return }
+        if automatic, let entry = currentWordbookEntry, entry.hasAnswer {
+            restoreWordbook(entry)
+            return
+        }
         activeRequestIsAutomatic = automatic
         currentRequestID = UUID().uuidString
         record(["event": "request_started", "automatic": automatic, "question": prompt,
@@ -839,7 +821,7 @@ final class BookAsk: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSTex
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
                 request.httpBody = try JSONSerialization.data(withJSONObject: ["model": config.model, "messages": bodyMessages, "stream": true, "max_tokens": 1800])
-                let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                let (bytes, response) = try await modelSession.bytes(for: request)
                 guard generation == activeGeneration else { return }
                 guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
                 record(["event": "response_headers", "httpStatus": http.statusCode,
@@ -880,6 +862,11 @@ final class BookAsk: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSTex
                 guard completedStream else { throw NSError(domain: "BookAsk", code: 4, userInfo: [NSLocalizedDescriptionKey: "连接提前结束，回答未完整接收。"] ) }
                 guard finishReason != "length" else { throw NSError(domain: "BookAsk", code: 5, userInfo: [NSLocalizedDescriptionKey: "回答达到长度限制，尚未完整生成，请缩小问题范围。"] ) }
                 guard !answer.isEmpty else { throw NSError(domain: "BookAsk", code: 3, userInfo: [NSLocalizedDescriptionKey: "模型没有返回文本，请重试。"] ) }
+                let saved = try await wordbookLibrary.save(selection, book: config.bookTitle,
+                    exchange: WordbookExchange(question: prompt, answer: answer, automatic: automatic),
+                    time: ISO8601DateFormatter().string(from: Date()))
+                guard generation == activeGeneration, !Task.isCancelled else { return }
+                currentWordbookEntry = saved
                 messages = previous + [["role": "user", "content": prompt], ["role": "assistant", "content": answer]]
                 displayHistory = prefix + answer
                 status.stringValue = "\(config.model) · 已完成 · 可继续追问"
@@ -907,6 +894,7 @@ final class BookAsk: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSTex
         value["sampleID"] = value["sampleID"] ?? currentSampleID
         value["requestID"] = currentRequestID
         value["runID"] = DiagnosticLog.shared.runID
+        if let recordSink { recordSink(value); return }
         DiagnosticLog.shared.record(value)
         value["time"] = ISO8601DateFormatter().string(from: Date())
         let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/BookAsk")
@@ -933,7 +921,7 @@ final class BookAsk: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSTex
 }
 
 let application = NSApplication.shared
-application.setActivationPolicy(.regular)
+application.setActivationPolicy(.accessory)
 let delegate = MainActor.assumeIsolated { BookAsk() }
 application.delegate = delegate
 application.run()

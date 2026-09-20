@@ -21,7 +21,7 @@ build/text-layout-tests
 
 xcrun swiftc src/WordbookStore.swift tests/wordbook.swift -o build/wordbook-tests
 build/wordbook-tests
-xcrun swiftc -framework AppKit src/ReadingTextArea.swift src/WordbookStore.swift src/WordbookWindow.swift tests/wordbook_layout.swift -o build/wordbook-layout-tests
+xcrun swiftc -framework AppKit src/ReadingPreferences.swift src/PaperTheme.swift src/ReadingTextArea.swift src/WordbookStore.swift src/WordbookWindow.swift tests/wordbook_layout.swift -o build/wordbook-layout-tests
 build/wordbook-layout-tests
 xcrun swiftc src/DiagnosticLog.swift tests/diagnostic_log.swift -o build/diagnostic-tests
 build/diagnostic-tests
@@ -37,5 +37,18 @@ xcrun swiftc -swift-version 5 -framework AppKit -framework ApplicationServices \
 build/reading-panel-tests
 if build/reading-panel-tests --old-no-outside-dismiss; then
   print -u2 'FAIL: regression did not detect the previous Books click behavior'
+  exit 1
+fi
+
+xcrun swiftc -swift-version 5 -framework AppKit -framework ApplicationServices \
+  "${panel_sources[@]}" build/BookAskForTests.swift tests/reading_visual_layout.swift -o build/reading-visual-tests
+build/reading-visual-tests
+
+
+xcrun swiftc -swift-version 5 -framework AppKit -framework ApplicationServices \
+  "${panel_sources[@]}" build/BookAskForTests.swift tests/wordbook_cache.swift -o build/wordbook-cache-tests
+build/wordbook-cache-tests
+if build/wordbook-cache-tests --old-no-cache; then
+  print -u2 'FAIL: regression did not detect repeated model requests for existing terms'
   exit 1
 fi

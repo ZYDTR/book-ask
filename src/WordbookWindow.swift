@@ -10,9 +10,11 @@ final class WordbookWindow: NSWindowController, NSTableViewDataSource, NSTableVi
     private var filtered: [WordbookEntry] = []
     private var revision = 0
     private let fallbackBook: String
+    private let library: WordbookLibrary
 
-    init(fallbackBook: String) {
+    init(fallbackBook: String, library: WordbookLibrary = .shared) {
         self.fallbackBook = fallbackBook
+        self.library = library
         let (detailScroll, detailText) = ReadingTextArea.make(font: .systemFont(ofSize: 15), height: 480)
         detail = detailText
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 560),
@@ -20,36 +22,47 @@ final class WordbookWindow: NSWindowController, NSTableViewDataSource, NSTableVi
         window.title = "词本"
         window.minSize = NSSize(width: 640, height: 450)
         window.isReleasedWhenClosed = false
+        PaperTheme.window(window)
         window.setFrameAutosaveName("BookAskWordbook")
         super.init(window: window)
         window.center()
         let content = window.contentView!
+        let paper = PaperCanvas(frame: content.bounds)
+        paper.autoresizingMask = [.width, .height]
+        content.addSubview(paper)
         search.placeholderString = "搜索词句或解释"
+        search.font = .systemFont(ofSize: 12)
         search.setAccessibilityLabel("搜索词本")
         search.delegate = self
         count.font = .systemFont(ofSize: 11)
-        count.textColor = .secondaryLabelColor
+        count.textColor = PaperTheme.muted
         count.lineBreakMode = .byTruncatingTail
         detail.setAccessibilityLabel("词本原文与解释")
+        PaperTheme.text(detail, font: .systemFont(ofSize: 15), inset: NSSize(width: 16, height: 12))
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("selection"))
         column.resizingMask = .autoresizingMask
         table.addTableColumn(column)
         table.headerView = nil
-        table.rowHeight = 53
+        table.rowHeight = 64
         table.intercellSpacing = NSSize(width: 0, height: 2)
         table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
-        table.usesAlternatingRowBackgroundColors = true
+        table.usesAlternatingRowBackgroundColors = false
+        table.backgroundColor = .clear
+        table.style = .plain
         table.allowsEmptySelection = false
         table.dataSource = self
         table.delegate = self
         table.setAccessibilityLabel("已保存的词句")
         let listScroll = NSScrollView()
         listScroll.hasVerticalScroller = true
+        listScroll.drawsBackground = false
         listScroll.hasHorizontalScroller = false
         listScroll.horizontalScrollElasticity = .none
         listScroll.documentView = table
         let divider = NSBox()
-        divider.boxType = .separator
+        divider.boxType = .custom
+        divider.fillColor = PaperTheme.line
+        divider.borderWidth = 0
         divider.setContentHuggingPriority(.defaultLow, for: .vertical)
         for view in [search, count, listScroll, divider, detailScroll] {
             view.translatesAutoresizingMaskIntoConstraints = false
@@ -93,7 +106,9 @@ final class WordbookWindow: NSWindowController, NSTableViewDataSource, NSTableVi
         let current = revision
         let book = fallbackBook
         Task {
-            let result = await Task.detached(priority: .userInitiated) { Result { try WordbookStore.load(fallbackBook: book) } }.value
+            let result: Result<[WordbookEntry], Error>
+            do { result = .success(try await library.entries(fallbackBook: book)) }
+            catch { result = .failure(error) }
             guard current == revision else { return }
             switch result {
             case .success(let values): entries = values; applyFilter()
@@ -123,15 +138,18 @@ final class WordbookWindow: NSWindowController, NSTableViewDataSource, NSTableVi
 
     func numberOfRows(in tableView: NSTableView) -> Int { filtered.count }
 
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { PaperTableRow() }
+
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let entry = filtered[row]
         let cell = NSTableCellView()
         let title = NSTextField(labelWithString: entry.selection.replacingOccurrences(of: "\n", with: " "))
-        title.font = .systemFont(ofSize: 13, weight: .medium)
+        title.font = PaperTheme.serif(15)
+        title.textColor = PaperTheme.ink
         title.lineBreakMode = .byTruncatingTail
-        let subtitle = NSTextField(labelWithString: "\(Self.dateLabel(entry.latestTime)) · \(entry.visits.count) 次划词")
+        let subtitle = NSTextField(labelWithString: Self.dateLabel(entry.latestTime))
         subtitle.font = .systemFont(ofSize: 10)
-        subtitle.textColor = .secondaryLabelColor
+        subtitle.textColor = PaperTheme.muted
         subtitle.lineBreakMode = .byTruncatingTail
         for view in [title, subtitle] { view.translatesAutoresizingMaskIntoConstraints = false; cell.addSubview(view) }
         cell.textField = title
@@ -139,7 +157,7 @@ final class WordbookWindow: NSWindowController, NSTableViewDataSource, NSTableVi
         NSLayoutConstraint.activate([
             title.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 10),
             title.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
-            title.topAnchor.constraint(equalTo: cell.topAnchor, constant: 8),
+            title.topAnchor.constraint(equalTo: cell.topAnchor, constant: 12),
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             subtitle.trailingAnchor.constraint(equalTo: title.trailingAnchor),
             subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 4)
@@ -152,17 +170,23 @@ final class WordbookWindow: NSWindowController, NSTableViewDataSource, NSTableVi
     private func showDetail() {
         guard filtered.indices.contains(table.selectedRow) else { return }
         let entry = filtered[table.selectedRow]
-        var blocks = [entry.selection, entry.book]
-        for visit in entry.visits {
-            blocks.append(Self.dateLabel(visit.time))
-            for (index, exchange) in visit.exchanges.enumerated() {
-                if !exchange.automatic && !exchange.question.isEmpty { blocks.append("提问：\(exchange.question)") }
-                else if index == 0 { blocks.append("解释") }
-                blocks.append(exchange.answer)
-            }
-            if !visit.status.isEmpty { blocks.append(visit.status) }
+        let text = NSMutableAttributedString()
+        func append(_ value: String, font: NSFont, color: NSColor = PaperTheme.ink) {
+            text.append(NSAttributedString(string: value + "\n\n", attributes:
+                [.font: font, .foregroundColor: color, .paragraphStyle: PaperTheme.paragraph()]))
         }
-        detail.string = blocks.joined(separator: "\n\n")
+        append(entry.selection, font: PaperTheme.serif(23))
+        append(entry.book, font: .systemFont(ofSize: 11, weight: .medium), color: PaperTheme.muted)
+        for (index, exchange) in entry.exchanges.enumerated() {
+            if index > 0 && !exchange.question.isEmpty {
+                append("提问：\(exchange.question)", font: .systemFont(ofSize: 13, weight: .medium), color: PaperTheme.coral)
+            } else if index == 0 {
+                append("释义与例句", font: .systemFont(ofSize: 10, weight: .medium), color: PaperTheme.muted)
+            }
+            append(exchange.answer, font: .systemFont(ofSize: 15))
+        }
+        if !entry.status.isEmpty { append(entry.status, font: .systemFont(ofSize: 11), color: PaperTheme.muted) }
+        detail.textStorage?.setAttributedString(text)
         detail.scrollToBeginningOfDocument(nil)
     }
 
