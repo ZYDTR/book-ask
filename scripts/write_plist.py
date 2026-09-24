@@ -6,7 +6,7 @@ from pathlib import Path
 
 info = {
     "CFBundleName": "读书提问", "CFBundleDisplayName": "读书提问", "CFBundleExecutable": "BookAsk",
-    "CFBundleIdentifier": os.environ.get("BOOK_ASK_BUNDLE_ID", "com.zydtr.book-ask"), "CFBundlePackageType": "APPL", "CFBundleVersion": "13",
+    "CFBundleIdentifier": os.environ.get("BOOK_ASK_BUNDLE_ID", "com.zydtr.book-ask"), "CFBundlePackageType": "APPL", "CFBundleVersion": "15",
     "CFBundleShortVersionString": "0.2.6", "LSMinimumSystemVersion": "12.0", "NSHighResolutionCapable": True,
     "LSUIElement": True,
     "NSAppTransportSecurity": {"NSAllowsLocalNetworking": True, "NSAllowsArbitraryLoads": True},

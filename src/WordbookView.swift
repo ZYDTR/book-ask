@@ -27,7 +27,7 @@ final class WordbookView: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
     private let table = NSTableView()
     private let detail: NSTextView
     private let detailScroll: NSScrollView
-    private let listScroll = NSScrollView()
+    private let listScroll = ReadingScrollView()
     private var backButton: PaperButton!
     private var pinButton: PaperButton!
     private var cacheButton: PaperButton!

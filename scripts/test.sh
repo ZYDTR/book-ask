@@ -16,14 +16,14 @@ if build/selection-trigger-tests --old-foreground-gate; then
   print -u2 'FAIL: regression did not detect the old foreground gate'
   exit 1
 fi
-xcrun swiftc -framework AppKit src/ReadingTextArea.swift tests/text_layout.swift -o build/text-layout-tests
+xcrun swiftc -framework AppKit src/ReadingPreferences.swift src/PaperTheme.swift src/ReadingScrollView.swift src/ReadingTextArea.swift tests/text_layout.swift -o build/text-layout-tests
 build/text-layout-tests
 
 xcrun swiftc src/WordbookStore.swift tests/wordbook.swift -o build/wordbook-tests
 build/wordbook-tests
-xcrun swiftc -framework AppKit src/ReadingPreferences.swift src/PaperTheme.swift src/ReadingTextArea.swift src/WordbookStore.swift src/WordbookView.swift tests/wordbook_layout.swift -o build/wordbook-layout-tests
+xcrun swiftc -framework AppKit src/ReadingPreferences.swift src/PaperTheme.swift src/ReadingScrollView.swift src/ReadingTextArea.swift src/WordbookStore.swift src/WordbookView.swift tests/wordbook_layout.swift -o build/wordbook-layout-tests
 build/wordbook-layout-tests
-xcrun swiftc -framework AppKit src/ReadingPreferences.swift src/PaperTheme.swift src/ReadingTextArea.swift src/WordbookStore.swift src/WordbookView.swift tests/wordbook_search_layout.swift -o build/wordbook-search-layout-tests
+xcrun swiftc -framework AppKit src/ReadingPreferences.swift src/PaperTheme.swift src/ReadingScrollView.swift src/ReadingTextArea.swift src/WordbookStore.swift src/WordbookView.swift tests/wordbook_search_layout.swift -o build/wordbook-search-layout-tests
 build/wordbook-search-layout-tests
 if build/wordbook-search-layout-tests --old-borderless; then
   print -u2 'FAIL: regression did not detect overlapping search text and magnifier'
@@ -83,3 +83,7 @@ build/local-context-tests
 xcrun swiftc -swift-version 5 -framework AppKit -framework ApplicationServices \
   "${panel_sources[@]}" build/BookAskForTests.swift tests/context_cache_flow.swift -o build/context-cache-flow-tests
 build/context-cache-flow-tests
+
+xcrun swiftc -swift-version 5 -framework AppKit -framework ApplicationServices \
+  "${panel_sources[@]}" build/BookAskForTests.swift tests/scrollbar_proximity.swift -o build/scrollbar-proximity-tests
+build/scrollbar-proximity-tests

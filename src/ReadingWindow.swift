@@ -156,7 +156,6 @@ extension BookAsk {
         question = ReadingQuestionView()
         let (inputScroll, _) = ReadingTextArea.make(font: .systemFont(ofSize: 13), height: 23, textView: question)
         questionScroll = inputScroll
-        inputScroll.autohidesScrollers = true; inputScroll.scrollerStyle = .overlay
         question.isEditable = true; question.isRichText = false; question.allowsUndo = true
         PaperTheme.text(question, font: .systemFont(ofSize: 13), inset: NSSize(width: 0, height: 2))
         question.textContainer?.lineFragmentPadding = 0

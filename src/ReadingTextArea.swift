@@ -5,7 +5,7 @@ enum ReadingTextArea {
         // Start the viewport and its document at the same width. A zero-width
         // scroll view with a 540pt document would retain that 540pt excess when
         // Auto Layout later expands the viewport.
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 540, height: height))
+        let scroll = ReadingScrollView(frame: NSRect(x: 0, y: 0, width: 540, height: height))
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = false
         scroll.horizontalScrollElasticity = .none
