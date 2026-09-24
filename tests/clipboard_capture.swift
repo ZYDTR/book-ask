@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 
 /// Deterministic tests for the guarded Books-copy transaction (T02 decision rules,
 /// T03 snapshot/restore fidelity, T04 race & cancellation protection, T05 gesture
@@ -229,6 +230,52 @@ func check(_ value: Bool, _ name: String) {
         check(emptyRun.phase == .accepted && emptyRun.restored, "empty clipboard snapshot accepted and restored")
         check(emptySystem.firstString() == nil && emptySystem.snapshot()?.items.isEmpty == true,
               "empty clipboard restored to empty")
+
+        // Qt/WeChat publishes legacy names containing underscores. AppKit lists
+        // these names but refuses to read/write them as UTIs. Use real named
+        // pasteboards and synthetic bytes; never modify the user's clipboard.
+        let legacy = NSPasteboard(name: NSPasteboard.Name("bookask-test-legacy-" + UUID().uuidString))
+        var rawLegacy: Pasteboard?
+        check(PasteboardCreate(legacy.name.rawValue as CFString, &rawLegacy) == noErr, "create legacy fixture")
+        let raw = rawLegacy!
+        check(PasteboardClear(raw) == noErr, "clear named legacy fixture")
+        let legacyType = "com.trolltech.anymime.WeChat_RichEdit_Format"
+        let legacyType2 = "com.trolltech.anymime.QQ_Unicode_RichEdit_Format"
+        let fixture: [[String: Data]] = [
+            [legacyType: Data([0, 1, 255, 10]), legacyType2: Data([7, 0, 8]), "public.utf8-plain-text": Data("first item".utf8)],
+            [legacyType: Data([3, 4, 0, 99]), "public.utf8-plain-text": Data("second item".utf8)]
+        ]
+        for (index, entry) in fixture.enumerated() {
+            for (type, data) in entry {
+                check(PasteboardPutItemFlavor(raw, PasteboardItemID(bitPattern: index + 1)!, type as CFString,
+                                             data as CFData, []) == noErr, "write legacy fixture")
+            }
+        }
+        let legacySystem = SystemPasteboard(legacy)
+        let legacyCount = legacy.changeCount
+        guard let legacyBefore = legacySystem.snapshot() else {
+            fputs("FAIL: complete snapshot of Qt/WeChat legacy formats\n", stderr); exit(1)
+        }
+        check(legacy.changeCount == legacyCount, "legacy snapshot is read-only")
+        check(legacyBefore.items.count == fixture.count, "legacy item boundaries preserved")
+        for (index, entry) in fixture.enumerated() {
+            for (type, data) in entry {
+                check(legacyBefore.items[index][type] == data, "legacy snapshot exact bytes in correct item")
+            }
+        }
+        let legacyRun = CopyCapture.run(pasteboard: legacySystem, captureID: "legacy", issue: { _ in
+            legacy.clearContents()
+            legacy.setString("bulldozer", forType: .string)
+            return true
+        })
+        check(legacyRun.phase == .accepted && legacyRun.restored, "legacy clipboard permits capture and restoration")
+        let legacyAfter = legacySystem.snapshot()
+        check(legacyAfter?.items == legacyBefore.items, "all legacy items, types and bytes round-trip")
+        check(legacyAfter?.legacyTypeOrder == legacyBefore.legacyTypeOrder, "legacy flavor preference order preserved")
+        check(legacyRun.logFields()["snapshotBackend"] as? String == "appkit_with_legacy_formats",
+              "compatibility backend recorded without clipboard payloads")
+        check(legacy.string(forType: .string)?.contains("second item") == true, "restored legacy plain text usable")
+        legacy.releaseGlobally()
 
         // ---------- T05: gesture gating ----------
         check(BooksCopy.isSelectionGesture(dragged: true, clickCount: 1, button: 0), "drag selection issues a copy")

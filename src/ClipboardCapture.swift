@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 
 /// One guarded Books-copy transaction. The pre-existing clipboard is held only in
 /// memory; its contents are never logged, persisted, or sent to the model.
@@ -9,49 +10,128 @@ protocol PasteboardAccess {
     /// Full in-memory copy of every item and type. Returns nil when any type's data
     /// cannot be materialized; the caller must then skip the copy action entirely.
     func snapshot() -> ClipboardSnapshot?
+    /// Metadata only: backend and failure location, never clipboard payloads.
+    var snapshotDiagnostics: [String: Any] { get }
     /// Writes the snapshot back. Returns changeCount, or -1 on write failure.
     @discardableResult func restore(_ snapshot: ClipboardSnapshot) -> Int
     func firstString() -> String?
+}
+
+extension PasteboardAccess {
+    var snapshotDiagnostics: [String: Any] { [:] }
 }
 
 struct ClipboardSnapshot {
     /// One entry per pasteboard item: pasteboard type -> materialized bytes.
     let items: [[String: Data]]
     let changeCount: Int
+    /// Present only when a legacy format required the Pasteboard compatibility
+    /// API. Keep each item's original format order for restoration.
+    var legacyTypeOrder: [[String]]? = nil
     var typeCount: Int { items.reduce(0) { $0 + $1.count } }
     var byteCount: Int { items.reduce(0) { $0 + $1.values.reduce(0) { $0 + $1.count } } }
 }
 
-struct SystemPasteboard: PasteboardAccess {
+final class SystemPasteboard: PasteboardAccess {
     /// Defaults to the general pasteboard; tests inject a uniquely named
     /// pasteboard so real NSPasteboard semantics are exercised without
     /// touching the user's clipboard.
     private let pasteboard: NSPasteboard
+    private(set) var snapshotDiagnostics: [String: Any] = [:]
     init(_ pasteboard: NSPasteboard = .general) { self.pasteboard = pasteboard }
     var changeCount: Int { pasteboard.changeCount }
 
     func snapshot() -> ClipboardSnapshot? {
         let current = changeCount
+        snapshotDiagnostics = ["snapshotBackend": "appkit"]
         var items: [[String: Data]] = []
-        for item in pasteboard.pasteboardItems ?? [] {
+        var typeOrder: [[String]] = []
+        var rawBoard: Pasteboard?
+        var usedLegacy = false
+        let sourceItems = pasteboard.pasteboardItems ?? []
+        for (index, item) in sourceItems.enumerated() {
             var entry: [String: Data] = [:]
             for type in item.types {
                 // Materializes delayed/promised data; a missing value means the
                 // clipboard cannot be fully backed up, so the transaction is refused.
-                guard let data = item.data(forType: type) else { return nil }
+                var data = item.data(forType: type)
+                if data == nil {
+                    // Qt/WeChat names can contain underscores: AppKit advertises
+                    // them, then rejects them as UTIs. The public Pasteboard API
+                    // accepts these existing names. Match the item, not the first
+                    // global occurrence of a type (which can belong to another item).
+                    if rawBoard == nil { rawBoard = compatibilityBoard() }
+                    var status: OSStatus = -1
+                    if let raw = rawBoard {
+                        var count = 0
+                        status = PasteboardGetItemCount(raw, &count)
+                        if status == noErr && count == sourceItems.count {
+                            var identifier: PasteboardItemID?
+                            status = PasteboardGetItemIdentifier(raw, index + 1, &identifier)
+                            if status == noErr, let identifier = identifier {
+                                var bytes: CFData?
+                                status = PasteboardCopyItemFlavorData(raw, identifier, type.rawValue as CFString, &bytes)
+                                if status == noErr, let bytes = bytes { data = bytes as Data }
+                            }
+                        }
+                    }
+                    guard data != nil else {
+                        snapshotDiagnostics["snapshotFailureItem"] = index
+                        snapshotDiagnostics["snapshotFailureType"] = String(type.rawValue.prefix(200))
+                        snapshotDiagnostics["snapshotFailureStatus"] = status
+                        return nil
+                    }
+                    usedLegacy = true
+                    snapshotDiagnostics["snapshotBackend"] = "appkit_with_legacy_formats"
+                }
+                guard let data = data else { return nil }
                 entry[type.rawValue] = data
             }
             items.append(entry)
+            typeOrder.append(item.types.map(\.rawValue))
         }
-        guard changeCount == current else { return nil }
-        return ClipboardSnapshot(items: items, changeCount: current)
+        guard changeCount == current else {
+            snapshotDiagnostics["snapshotGenerationChanged"] = true
+            return nil
+        }
+        var result = ClipboardSnapshot(items: items, changeCount: current)
+        if usedLegacy { result.legacyTypeOrder = typeOrder }
+        return result
+    }
+
+    /// Each reference is confined to the serial capture transaction; these APIs
+    /// must not be used concurrently through a shared Pasteboard reference.
+    private func compatibilityBoard() -> Pasteboard? {
+        let name = pasteboard.name == .general ? kPasteboardClipboard : pasteboard.name.rawValue
+        var board: Pasteboard?
+        guard PasteboardCreate(name as CFString, &board) == noErr, let board = board else { return nil }
+        PasteboardSynchronize(board)
+        return board
     }
 
     @discardableResult func restore(_ snapshot: ClipboardSnapshot) -> Int {
-        let restored = snapshot.items.map { entry -> NSPasteboardItem in
+        if let order = snapshot.legacyTypeOrder {
+            guard order.count == snapshot.items.count,
+                  zip(order, snapshot.items).allSatisfy({ Set($0.0) == Set($0.1.keys) }),
+                  let raw = compatibilityBoard() else { return -1 }
+            guard PasteboardClear(raw) == noErr else { return -1 }
+            for (index, types) in order.enumerated() {
+                let identifier = PasteboardItemID(bitPattern: index + 1)!
+                for type in types {
+                    guard let data = snapshot.items[index][type],
+                          PasteboardPutItemFlavor(raw, identifier, type as CFString, data as CFData, []) == noErr
+                    else { return -1 }
+                }
+            }
+            return changeCount
+        }
+        var restored: [NSPasteboardItem] = []
+        for entry in snapshot.items {
             let item = NSPasteboardItem()
-            for (type, data) in entry { item.setData(data, forType: NSPasteboard.PasteboardType(type)) }
-            return item
+            for (type, data) in entry {
+                guard item.setData(data, forType: NSPasteboard.PasteboardType(type)) else { return -1 }
+            }
+            restored.append(item)
         }
         pasteboard.clearContents()
         if !restored.isEmpty, !pasteboard.writeObjects(restored) { return -1 }
@@ -125,15 +205,18 @@ struct CaptureOutcome {
     var preservedNew = false
     var polls = 0
     var elapsedMS = 0
+    var snapshotReadDetails: [String: Any] = [:]
 
     /// Diagnostics-safe fields: counts and phases only, never clipboard contents.
     func logFields() -> [String: Any] {
-        ["captureID": captureID, "strategy": strategy, "phase": phase.rawValue,
+        var fields: [String: Any] = ["captureID": captureID, "strategy": strategy, "phase": phase.rawValue,
          "rejection": rejection?.rawValue ?? "", "wrapper": wrapper, "issueMethod": issueMethod,
          "baselineCount": baselineCount, "capturedCount": capturedCount, "finalCount": finalCount,
          "snapshotItems": snapshotItems, "snapshotTypes": snapshotTypes, "snapshotBytes": snapshotBytes,
          "restored": restored, "preservedNew": preservedNew, "polls": polls, "elapsedMS": elapsedMS,
          "acceptedLength": acceptedText?.count ?? 0]
+        fields.merge(snapshotReadDetails) { existing, _ in existing }
+        return fields
     }
 }
 
@@ -164,8 +247,12 @@ enum CopyCapture {
             return outcome
         }
         // eligible → snapshot
-        guard let snapshot = pasteboard.snapshot() else {
+        outcome.baselineCount = pasteboard.changeCount
+        let snapshot = pasteboard.snapshot()
+        outcome.snapshotReadDetails = pasteboard.snapshotDiagnostics
+        guard let snapshot = snapshot else {
             outcome.rejection = .snapshotIncomplete
+            outcome.finalCount = pasteboard.changeCount
             return finish(.rejected)
         }
         outcome.phase = .snapshot
