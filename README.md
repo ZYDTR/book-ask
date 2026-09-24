@@ -1,6 +1,6 @@
 # 读书提问
 
-私人 Git 项目。保留 macOS 图书阅读器，在原书里划选文字就打开提问窗口，使用已有 LiteLLM 的 Gemini Flash。软件免费，仅消耗模型 API。个人私有仓库：[ZYDTR/book-ask](https://github.com/ZYDTR/book-ask)。书籍、密钥、阅读记录与原始诊断证据只存本机，不入库。
+公开 Git 项目。保留 macOS 图书阅读器，在原书里划选文字就打开提问窗口，使用已有 LiteLLM 的 Gemini Flash。软件免费，仅消耗模型 API。公开仓库：[ZYDTR/book-ask](https://github.com/ZYDTR/book-ask)。书籍、密钥、阅读记录与原始诊断证据只存本机，不入库。
 
 ## 需求入口与文档归属
 
