@@ -21,8 +21,18 @@ build/text-layout-tests
 
 xcrun swiftc src/WordbookStore.swift tests/wordbook.swift -o build/wordbook-tests
 build/wordbook-tests
-xcrun swiftc -framework AppKit src/ReadingPreferences.swift src/PaperTheme.swift src/ReadingTextArea.swift src/WordbookStore.swift src/WordbookWindow.swift tests/wordbook_layout.swift -o build/wordbook-layout-tests
+xcrun swiftc -framework AppKit src/ReadingPreferences.swift src/PaperTheme.swift src/ReadingTextArea.swift src/WordbookStore.swift src/WordbookView.swift tests/wordbook_layout.swift -o build/wordbook-layout-tests
 build/wordbook-layout-tests
+xcrun swiftc -framework AppKit src/ReadingPreferences.swift src/PaperTheme.swift src/ReadingTextArea.swift src/WordbookStore.swift src/WordbookView.swift tests/wordbook_search_layout.swift -o build/wordbook-search-layout-tests
+build/wordbook-search-layout-tests
+if build/wordbook-search-layout-tests --old-borderless; then
+  print -u2 'FAIL: regression did not detect overlapping search text and magnifier'
+  exit 1
+fi
+if build/wordbook-search-layout-tests --old-no-scroll; then
+  print -u2 'FAIL: regression did not detect the clipped end of a long search query'
+  exit 1
+fi
 xcrun swiftc src/DiagnosticLog.swift tests/diagnostic_log.swift -o build/diagnostic-tests
 build/diagnostic-tests
 xcrun swiftc -framework AppKit -framework ApplicationServices src/ClipboardCapture.swift src/BooksCopy.swift tests/clipboard_capture.swift -o build/clipboard-capture-tests
@@ -42,7 +52,15 @@ fi
 
 xcrun swiftc -swift-version 5 -framework AppKit -framework ApplicationServices \
   "${panel_sources[@]}" build/BookAskForTests.swift tests/reading_visual_layout.swift -o build/reading-visual-tests
+
+xcrun swiftc -swift-version 5 -framework AppKit -framework ApplicationServices \
+  "${panel_sources[@]}" build/BookAskForTests.swift tests/manual_popup_input.swift -o build/manual-popup-input-tests
+build/manual-popup-input-tests
 build/reading-visual-tests
+
+xcrun swiftc -swift-version 5 -framework AppKit -framework ApplicationServices \
+  "${panel_sources[@]}" build/BookAskForTests.swift tests/trial_distribution.swift -o build/trial-distribution-tests
+build/trial-distribution-tests
 
 
 xcrun swiftc -swift-version 5 -framework AppKit -framework ApplicationServices \
@@ -52,3 +70,16 @@ if build/wordbook-cache-tests --old-no-cache; then
   print -u2 'FAIL: regression did not detect repeated model requests for existing terms'
   exit 1
 fi
+
+xcrun swiftc -swift-version 5 -framework AppKit -framework ApplicationServices \
+  "${panel_sources[@]}" build/BookAskForTests.swift tests/wordbook_navigation.swift -o build/wordbook-navigation-tests
+build/wordbook-navigation-tests
+
+# New context and independent definition contracts.
+xcrun swiftc src/WordbookStore.swift tests/wordbook_definitions.swift -o build/definition-tests
+build/definition-tests
+xcrun swiftc src/ReadingContext.swift src/LocalBookContext.swift tests/local_book_context.swift -o build/local-context-tests
+build/local-context-tests
+xcrun swiftc -swift-version 5 -framework AppKit -framework ApplicationServices \
+  "${panel_sources[@]}" build/BookAskForTests.swift tests/context_cache_flow.swift -o build/context-cache-flow-tests
+build/context-cache-flow-tests

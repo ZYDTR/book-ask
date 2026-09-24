@@ -1,5 +1,24 @@
 import Foundation
 
+/// A gesture offers one explicit action. It carries identity, never selected text.
+struct SelectionActionIntent {
+    struct Token: Equatable { let pid: Int32; let revision: Int }
+    private(set) var token: Token?
+
+    mutating func arm(pid: Int32, revision: Int) {
+        reset()
+        token = Token(pid: pid, revision: revision)
+    }
+
+    mutating func reset() { token = nil }
+
+    mutating func consume(pid: Int32?, revision: Int, mouseDown: Bool) -> Token? {
+        defer { reset() }
+        guard let pid, token == Token(pid: pid, revision: revision), !mouseDown else { return nil }
+        return token
+    }
+}
+
 /// Mouse events and polling observe the same physical button transition. Cache
 /// the event's button state before handing out a revision, so the following poll
 /// cannot invalidate a just-completed drag by counting its release a second time.

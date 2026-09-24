@@ -10,7 +10,7 @@ import AppKit
         panel.isReleasedWhenClosed = false
         var clock = 100.0
         var events = [[String: Any]]()
-        let controller = ReadingPanelController(panel: panel, automaticDismissal: false,
+        let controller = ReadingPanelController(panel: panel,
             now: { clock }, record: { events.append($0) })
         func check(_ result: Bool, _ name: String) {
             if !result { fputs("FAIL: \(name)\n", stderr); exit(1) }
@@ -46,9 +46,23 @@ import AppKit
               "a later selection's coordinates cannot alter the earlier immutable capture")
         func show() {
             panel.orderFront(nil)
-            controller.didPresent(forSelection: true)
+            controller.didPresent()
             check(panel.isVisible, "offscreen fixture is ordered in")
         }
+        show()
+        show()
+        controller.isPinned = true
+        controller.outsideClick(timestamp: clock, source: "global_mouse")
+        check(panel.isVisible, "Pin keeps the panel visible on outside clicks")
+        controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification, object: panel))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        check(panel.isVisible, "Pin also survives the deferred focus-loss path")
+        panel.cancelOperation(nil)
+        check(!panel.isVisible, "Escape still hides a pinned panel")
+        show()
+        controller.isPinned = false
+        controller.outsideClick(timestamp: clock, source: "global_mouse")
+        check(!panel.isVisible, "Unpin restores outside-click dismissal")
         show()
         // Actual user failure: Books stays frontmost while a nonactivating panel
         // is visible. A Books click must hide the panel even without app change.
@@ -78,44 +92,7 @@ import AppKit
               "red close button hides without releasing the reusable panel")
 
         show()
-        clock += 20
-        controller.countdownFired(for: controller.presentationID)
-        check(panel.isVisible && controller.deadline == nil, "unchecked option never times out")
-        controller.setAutomaticDismissal(true)
-        let first = controller.presentationID
-        clock += 14.9
-        controller.countdownFired(for: first)
-        check(panel.isVisible, "15 seconds cannot fire early")
-        clock += 0.1
-        controller.countdownFired(for: first)
-        check(!panel.isVisible, "checked option hides at 15 seconds")
-
-        show()
-        let old = controller.presentationID
-        clock += 10
-        show()
-        let next = controller.presentationID
-        clock += 5
-        controller.countdownFired(for: old)
-        check(panel.isVisible, "old word's timer cannot close the next word")
-        clock += 10
-        controller.countdownFired(for: next)
-        check(!panel.isVisible, "new word gets its own full 15 seconds")
-
-        show()
-        let beforeInteraction = controller.presentationID
-        controller.userInteracted()
         clock += 30
-        controller.countdownFired(for: beforeInteraction)
-        check(panel.isVisible && controller.deadline == nil,
-              "typing/selecting/scrolling cancels this presentation's timeout")
-        show()
-        check(controller.deadline != nil, "next selection reenables countdown without changing the checkbox")
-        let beforeOff = controller.presentationID
-        controller.setAutomaticDismissal(false)
-        clock += 30
-        controller.countdownFired(for: beforeOff)
-        check(panel.isVisible, "unchecking cancels even a queued callback")
         controller.outsideClick(timestamp: clock - 40, source: "queued_old_click")
         check(panel.isVisible, "queued mouse-down from before presentation cannot instantly hide it")
         controller.dismiss(reason: "test_complete")
@@ -123,11 +100,15 @@ import AppKit
 
         // Exercise the actual application window layout at the user's minimum
         // size. All four controls must fit rather than silently clipping text.
+        let legacy = UserDefaults.standard.object(forKey: "autoDismissAfter15Seconds")
+        UserDefaults.standard.set(true, forKey: "autoDismissAfter15Seconds")
+        defer { UserDefaults.standard.set(legacy, forKey: "autoDismissAfter15Seconds") }
         let owner = BookAsk()
+        owner.recordSink = { _ in }
         owner.buildWindow()
         owner.panel.setFrameOrigin(NSPoint(x: -20000, y: -20000))
         owner.panel.contentView!.layoutSubtreeIfNeeded()
-        let controls = [owner.automaticButton!, owner.autoDismissButton!, owner.promptDisclosure!]
+        let controls = [owner.automaticButton!, owner.smallerAnswerButton!, owner.largerAnswerButton!, owner.styleButton!, owner.promptDisclosure!]
         for button in controls {
             check(button.frame.width >= button.intrinsicContentSize.width - 0.5,
                   "top-row label must fit at 500-point width: \(button.title)")
@@ -163,7 +144,35 @@ import AppKit
         check(owner.question.stringValue == "an unsent question" && owner.messages.count == 1
               && owner.activeGeneration == generation,
               "same-word repositioning preserves the conversation and cannot start a paid request")
+        owner.panelController.isPinned = true
+        let pinnedOrigin = owner.panel.frame.origin
+        owner.currentPlacement = leftSelection
+        owner.showWindow(reason: "repeat_selection")
+        check(owner.panel.frame.origin == pinnedOrigin, "new content cannot reposition the pinned reading window")
+        owner.panelController.isPinned = false
+        let chosenOrigin = NSPoint(x: actualVisible.minX + 83, y: actualVisible.minY + 67)
+        owner.panel.setFrameOrigin(chosenOrigin)
+        let chosenFrame = owner.panel.frame
+        owner.panelController.dismiss(reason: "escape")
+        owner.openWindow()
+        check(owner.panel.frame == chosenFrame, "menu reopen keeps the last position despite stale selection placement")
+        owner.panelController.dismiss(reason: "outside_click")
+        owner.showWindow(reason: "reopen")
+        check(owner.panel.frame == chosenFrame, "application reopen keeps the same position")
+        owner.panelController.dismiss(reason: "component_restart")
+        let restarted = BookAsk(); restarted.recordSink = { _ in }; restarted.buildWindow()
+        check(restarted.hasWindowPosition, "saved frame is restored by a new application owner")
+        restarted.showWindow(reason: "launch")
+        check(restarted.panel.frame == chosenFrame, "launch honors persisted origin and size")
+        restarted.panelController.dismiss(reason: "component_restart_complete")
+        check(ReadingPanelController.visibleOrigin(NSPoint(x: -4000, y: 9000), size: size, in: visible)
+              == NSPoint(x: visible.minX, y: visible.maxY - size.height), "offscreen restore is clamped to a reachable position")
+        owner.showWindow(reason: "explicit_open")
+        // Exercise real run-loop elapsed time with the legacy preference ON.
+        // A hidden/dead timer must not survive the feature removal.
+        RunLoop.current.run(until: Date().addingTimeInterval(15.3))
+        check(owner.panel.isVisible, "legacy 15-second preference cannot hide the new panel")
         owner.panelController.dismiss(reason: "component_test_complete")
-        print("PASS: frozen selection placement, offset window and multi-screen coordinates; Books outside-click regression, click pass-through, Esc/close, 15s deadline, old-timer isolation, interaction/off cancellation, minimum-width layout and state preservation")
+        print("PASS: frozen selection placement, offset window and multi-screen coordinates; Books outside-click regression, click pass-through, Esc/close, legacy 15s preference ignored with real elapsed time, minimum-width layout and state preservation")
     }
 }

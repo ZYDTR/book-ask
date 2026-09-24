@@ -16,4 +16,6 @@ logs/
 *.p12
 /config.json
 /auth.json
+/trial-config.json
+TrialConfiguration.json
 /history.jsonl

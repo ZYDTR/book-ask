@@ -6,14 +6,60 @@ struct WordbookExchange: Codable, Equatable, Sendable {
     let automatic: Bool
 }
 
-/// One exact selected term, one definition, followed by explicit questions.
+/// Each definition owns its source context and follow-up conversation.
+struct WordbookDefinition: Codable, Equatable, Sendable {
+    var id: String
+    var book: String
+    var createdAt: String
+    var contextText: String
+    var contextStatus: String
+    var exchanges: [WordbookExchange]
+}
+
 struct WordbookEntry: Codable, Sendable {
     var selection: String
-    var book: String
     var latestTime: String
-    var exchanges: [WordbookExchange]
+    var definitions: [WordbookDefinition]
+    private var emptyBook: String
     var id: String { selection }
-    var hasAnswer: Bool { !exchanges.isEmpty }
+    var book: String {
+        get { definitions.first?.book ?? emptyBook }
+        set { emptyBook = newValue; if !definitions.isEmpty { definitions[0].book = newValue } }
+    }
+    // Compatibility projections for existing renderers and v1 import.
+    var exchanges: [WordbookExchange] {
+        get { definitions.first?.exchanges ?? [] }
+        set {
+            if definitions.isEmpty {
+                if !newValue.isEmpty { definitions = [WordbookDefinition(id: UUID().uuidString, book: emptyBook,
+                    createdAt: latestTime, contextText: "", contextStatus: "旧记录未保存语境", exchanges: newValue)] }
+            } else { definitions[0].exchanges = newValue }
+        }
+    }
+    init(selection: String, book: String, latestTime: String, exchanges: [WordbookExchange]) {
+        self.selection = selection; self.latestTime = latestTime; emptyBook = book; definitions = []
+        self.exchanges = exchanges
+    }
+    private enum CodingKeys: String, CodingKey { case selection, book, latestTime, exchanges, definitions }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        selection = try c.decode(String.self, forKey: .selection)
+        latestTime = try c.decode(String.self, forKey: .latestTime)
+        emptyBook = try c.decodeIfPresent(String.self, forKey: .book) ?? "图书"
+        definitions = try c.decodeIfPresent([WordbookDefinition].self, forKey: .definitions) ?? []
+        if !c.contains(.definitions) { exchanges = try c.decode([WordbookExchange].self, forKey: .exchanges) }
+    }
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(selection, forKey: .selection); try c.encode(latestTime, forKey: .latestTime)
+        try c.encode(book, forKey: .book); try c.encode(definitions, forKey: .definitions)
+    }
+    func displaying(_ id: String?) -> WordbookEntry {
+        var copy = self
+        if let id, let item = definitions.first(where: { $0.id == id }) { copy.definitions = [item] }
+        return copy
+    }
+    var hasAnswer: Bool { !definitions.isEmpty }
     var status: String { hasAnswer ? "" : "尚未生成解释" }
     var conversation: [[String: String]] {
         exchanges.flatMap { [["role": "user", "content": $0.question], ["role": "assistant", "content": $0.answer]] }
@@ -24,9 +70,18 @@ struct WordbookEntry: Codable, Sendable {
         }.joined(separator: "\n\n")
     }
     func matches(_ query: String) -> Bool {
-        query.isEmpty || ([selection, book] + exchanges.flatMap { [$0.question, $0.answer] })
+        query.isEmpty || ([selection] + definitions.flatMap { [$0.book] + $0.exchanges.flatMap { [$0.question, $0.answer] } })
             .contains { $0.localizedCaseInsensitiveContains(query) }
     }
+}
+
+struct DeletedDefinition: Sendable {
+    let term: String
+    let definition: WordbookDefinition?
+    let index: Int
+    let book: String
+    let time: String
+    var entireEntry: WordbookEntry? = nil
 }
 
 private struct LegacyVisit {
@@ -60,9 +115,9 @@ enum WordbookStore {
     }
     static func decode(_ data: Data) throws -> [WordbookEntry] {
         let document = try JSONDecoder().decode(WordbookDocument.self, from: data)
-        guard document.version == 1,
+        guard [1, 2].contains(document.version),
               Set(document.entries.map(\.id)).count == document.entries.count,
-              document.entries.allSatisfy({ !$0.id.isEmpty && $0.id == key($0.id) && $0.exchanges.allSatisfy { !key($0.answer).isEmpty } }) else {
+              document.entries.allSatisfy({ !$0.id.isEmpty && $0.id == key($0.id) && Set($0.definitions.map(\.id)).count == $0.definitions.count && $0.definitions.allSatisfy { !$0.id.isEmpty && !$0.exchanges.isEmpty && $0.exchanges.allSatisfy { !key($0.answer).isEmpty } } }) else {
             throw NSError(domain: "Wordbook", code: 1, userInfo: [NSLocalizedDescriptionKey: "词本格式不正确，已保留原文件。"])
         }
         return sorted(document.entries)
@@ -116,6 +171,7 @@ actor WordbookLibrary {
     let url: URL
     let historyURL: URL
     private var values: [String: WordbookEntry]?
+    private var deletionRevisions: [String: Int] = [:]
 
     init(url: URL = WordbookStore.storeURL, historyURL: URL = WordbookStore.historyURL) {
         self.url = url; self.historyURL = historyURL
@@ -125,7 +181,16 @@ actor WordbookLibrary {
         let fm = FileManager.default
         let entries: [WordbookEntry]
         if fm.fileExists(atPath: url.path) {
-            entries = try WordbookStore.decode(Data(contentsOf: url))
+            let data = try Data(contentsOf: url)
+            entries = try WordbookStore.decode(data)
+            if (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["version"] as? Int == 1 {
+                let backup = url.deletingLastPathComponent().appendingPathComponent("backups", isDirectory: true)
+                try fm.createDirectory(at: backup, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                let original = backup.appendingPathComponent("wordbook-v1-" + UUID().uuidString + ".json")
+                try data.write(to: original, options: .atomic)
+                try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: original.path)
+                try persist(Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) }))
+            }
         } else {
             let exists = fm.fileExists(atPath: historyURL.path)
             let data = exists ? try Data(contentsOf: historyURL) : Data()
@@ -146,7 +211,7 @@ actor WordbookLibrary {
         let fm = FileManager.default
         try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes]
-        try encoder.encode(WordbookDocument(version: 1, entries: WordbookStore.sorted(Array(next.values)))).write(to: url, options: .atomic)
+        try encoder.encode(WordbookDocument(version: 2, entries: WordbookStore.sorted(Array(next.values)))).write(to: url, options: .atomic)
         try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
     func entries(fallbackBook: String) throws -> [WordbookEntry] {
@@ -181,4 +246,76 @@ actor WordbookLibrary {
         try persist(next); values = next
         return entry
     }
+    func requestRevision(_ term: String) throws -> Int {
+        try ensureLoaded(fallbackBook: "图书")
+        let key = WordbookStore.key(term)
+        guard values![key] != nil else { throw NSError(domain: "Wordbook", code: 4, userInfo: [NSLocalizedDescriptionKey: "该词条已被删除。"] ) }
+        return deletionRevisions[key, default: 0]
+    }
+    func appendDefinition(_ term: String, book: String, contextText: String, contextStatus: String,
+                          exchange: WordbookExchange, time: String, expectedRevision: Int? = nil) throws -> WordbookEntry {
+        try ensureLoaded(fallbackBook: book)
+        let key = WordbookStore.key(term)
+        if let expectedRevision, deletionRevisions[key, default: 0] != expectedRevision {
+            throw NSError(domain: "Wordbook", code: 3, userInfo: [NSLocalizedDescriptionKey: "该词条已被删除，未保存晚到的回答。"])
+        }
+        guard !key.isEmpty, !WordbookStore.key(exchange.answer).isEmpty else { throw NSError(domain: "Wordbook", code: 2) }
+        var entry = values![key] ?? WordbookEntry(selection: key, book: book, latestTime: time, exchanges: [])
+        entry.definitions.append(WordbookDefinition(id: UUID().uuidString, book: book, createdAt: time,
+            contextText: contextText, contextStatus: contextStatus, exchanges: [exchange]))
+        entry.latestTime = time
+        var next = values!; next[key] = entry; try persist(next); values = next
+        return entry
+    }
+    func appendFollowup(_ term: String, definitionID: String, exchange: WordbookExchange, time: String) throws -> WordbookEntry {
+        try ensureLoaded(fallbackBook: "图书")
+        let key = WordbookStore.key(term)
+        guard var entry = values![key], let i = entry.definitions.firstIndex(where: { $0.id == definitionID }) else {
+            throw NSError(domain: "Wordbook", code: 3, userInfo: [NSLocalizedDescriptionKey: "这份解释已被删除，未重新保存。"])
+        }
+        entry.definitions[i].exchanges.append(exchange); entry.latestTime = time
+        var next = values!; next[key] = entry; try persist(next); values = next
+        return entry
+    }
+    func delete(_ term: String, definitionID: String?) throws -> DeletedDefinition {
+        try ensureLoaded(fallbackBook: "图书")
+        let key = WordbookStore.key(term)
+        guard var entry = values![key] else { throw NSError(domain: "Wordbook", code: 4) }
+        let index: Int
+        let definition: WordbookDefinition?
+        if let id = definitionID, let i = entry.definitions.firstIndex(where: { $0.id == id }) {
+            index = i; definition = entry.definitions.remove(at: i)
+        } else if definitionID == nil && entry.definitions.isEmpty { index = 0; definition = nil }
+        else { throw NSError(domain: "Wordbook", code: 4) }
+        let token = DeletedDefinition(term: key, definition: definition, index: index, book: entry.book, time: entry.latestTime)
+        var next = values!
+        if entry.definitions.isEmpty { next.removeValue(forKey: key) } else { next[key] = entry }
+        try persist(next); values = next
+        deletionRevisions[key, default: 0] += 1
+        return token
+    }
+    func deleteTerm(_ term: String) throws -> DeletedDefinition {
+        try ensureLoaded(fallbackBook: "图书")
+        let key = WordbookStore.key(term)
+        guard let entry = values![key] else { throw NSError(domain: "Wordbook", code: 4) }
+        let token = DeletedDefinition(term: key, definition: nil, index: 0, book: entry.book, time: entry.latestTime, entireEntry: entry)
+        var next = values!; next.removeValue(forKey: key)
+        try persist(next); values = next
+        deletionRevisions[key, default: 0] += 1
+        return token
+    }
+    func undo(_ token: DeletedDefinition) throws {
+        try ensureLoaded(fallbackBook: token.book)
+        var entry = values![token.term] ?? WordbookEntry(selection: token.term, book: token.book, latestTime: token.time, exchanges: [])
+        if let original = token.entireEntry {
+            let originalIDs = Set(original.definitions.map(\.id))
+            entry.definitions = original.definitions + entry.definitions.filter { !originalIDs.contains($0.id) }
+            entry.latestTime = max(entry.latestTime, original.latestTime)
+        } else if let definition = token.definition, !entry.definitions.contains(where: { $0.id == definition.id }) {
+            // Original save order survives a concurrent append while the undo banner was visible.
+            entry.definitions.insert(definition, at: min(token.index, entry.definitions.count))
+        }
+        var next = values!; next[token.term] = entry; try persist(next); values = next
+    }
+
 }

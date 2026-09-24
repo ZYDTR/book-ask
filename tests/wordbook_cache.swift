@@ -64,6 +64,8 @@ final class CountingModel: URLProtocol {
             while !condition() && Date() < deadline { await Task.yield() }
             check(condition(), "asynchronous request/lookup must settle within 5 seconds")
         }
+        let savedSize = UserDefaults.standard.object(forKey: "answerFontSize")
+        defer { UserDefaults.standard.set(savedSize, forKey: "answerFontSize") }
         let owner = makeOwner(library)
         func select(_ term: String) async {
             if CommandLine.arguments.contains("--old-no-cache") {
@@ -84,13 +86,23 @@ final class CountingModel: URLProtocol {
         await select("crate")
         check(CountingModel.count == 1 && owner.currentWordbookEntry?.hasAnswer == true, "cache also displays with automatic explanation off")
         owner.autoExplain = true
+        CountingModel.setMode("hold")
         owner.question.stringValue = "Can you give another example?"
         owner.sendQuestion()
+        await wait { CountingModel.held != nil }
+        owner.changeAnswerSize(to: 19)
+        check(CountingModel.count == 2, "changing answer size during a held real request starts no additional request")
+        CountingModel.held!.finish()
+        CountingModel.setMode("complete")
         await wait { owner.activeTask == nil }
+        owner.transcript.attributedString().enumerateAttribute(.font, in: NSRange(location: 0, length: owner.transcript.string.utf16.count)) { font, _, _ in
+            check((font as? NSFont)?.pointSize == 19, "late SSE uses the changed answer size in every run")
+        }
         check(CountingModel.count == 2 && owner.messages.count == 4, "explicit follow-up sends one request with restored conversation")
         let relaunched = makeOwner(WordbookLibrary(url: url, historyURL: history))
         relaunched.receive("crate", sampleID: "isolated-relaunch")
         await wait { relaunched.lookupTask == nil }
+        check(relaunched.answerFontSize == 19 && relaunched.transcript.font?.pointSize == 19, "relaunch and cache restore retain answer size")
         check(CountingModel.count == 2 && relaunched.messages.count == 4, "restart uses persistent definition and follow-up without HTTP")
         // Queued cache reads must not paint over a newer selection.
         owner.receive("fragile", sampleID: "old-read")

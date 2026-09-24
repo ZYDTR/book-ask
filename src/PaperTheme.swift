@@ -2,16 +2,39 @@ import AppKit
 
 /// Original, deterministic vector textures. No external image/font resources.
 enum PaperTheme {
-    static let paper = adaptive("paper", light: 0xFAF8F2, dark: 0x232923)
-    static let ink = adaptive("ink", light: 0x303831, dark: 0xF0EBDD)
-    static let muted = adaptive("muted", light: 0x73796E, dark: 0xADB2A5)
-    static let line = adaptive("line", light: 0xDCDDD1, dark: 0x485246)
-    static let ochre = adaptive("ochre", light: 0xE7B857, dark: 0xD6AC60)
-    static let blue = adaptive("blue", light: 0x8DBCD1, dark: 0x94B7C4)
-    static let sage = adaptive("sage", light: 0xA9BC9A, dark: 0xA2B58D)
-    static let coral = adaptive("coral", light: 0xAD5949, dark: 0xCF957B)
-    static let input = adaptive("input", light: 0xFDFCF9, dark: 0x2D352D)
-    static let buttonInk = adaptive("buttonInk", light: 0xFFFFFF, dark: 0x242B24)
+    private static let paperColors = palette(books: false)
+    private static let bookColors = palette(books: true)
+    static var style: ReadingStyle { ReadingPreferences.style() }
+    private static var colors: [String: NSColor] { style == .books ? bookColors : paperColors }
+    static var paper: NSColor { colors["paper"]! }
+    static var ink: NSColor { colors["ink"]! }
+    static var muted: NSColor { colors["muted"]! }
+    static var line: NSColor { colors["line"]! }
+    static var ochre: NSColor { colors["ochre"]! }
+    static var blue: NSColor { colors["blue"]! }
+    static var sage: NSColor { colors["sage"]! }
+    static var coral: NSColor { colors["coral"]! }
+    static var input: NSColor { colors["input"]! }
+    static var buttonInk: NSColor { colors["buttonInk"]! }
+
+    private static func palette(books: Bool) -> [String: NSColor] {
+        let values: [(String, Int, Int)] = books ? [
+            ("paper", 0xFFFFFF, 0x000000), ("ink", 0x111111, 0xFFFFFF),
+            ("muted", 0x777777, 0x999999), ("line", 0xDDDDDD, 0x303030),
+            ("ochre", 0xD7AD38, 0xD7AD38), ("blue", 0x72AACF, 0x72AACF),
+            ("sage", 0xDDDDDD, 0xDDDDDD), ("coral", 0xA46438, 0xCFA37F),
+            ("input", 0xFFFFFF, 0x000000), ("buttonInk", 0x111111, 0x111111)
+        ] : [
+            ("paper", 0xFAF8F2, 0x29312C), ("ink", 0x303831, 0xE9E6DD),
+            ("muted", 0x73796E, 0xA1AAA0), ("line", 0xDCDDD1, 0x485246),
+            ("ochre", 0xE7B857, 0xD6AC60), ("blue", 0x8DBCD1, 0x94B7C4),
+            ("sage", 0xA9BC9A, 0xA2B58D), ("coral", 0xAD5949, 0xCEA185),
+            ("input", 0xFDFCF9, 0x2D352D), ("buttonInk", 0xFFFFFF, 0x242B24)
+        ]
+        return Dictionary(uniqueKeysWithValues: values.map { name, light, dark in
+            (name, adaptive((books ? "Books." : "Paper.") + name, light: light, dark: dark))
+        })
+    }
 
     static func isDark(_ appearance: NSAppearance = .currentDrawing()) -> Bool {
         appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
@@ -29,11 +52,20 @@ enum PaperTheme {
                 blue: CGFloat(hex & 255) / 255, alpha: 1)
     }
 
-    static func serif(_ size: CGFloat) -> NSFont {
-        NSFont(name: "NewYork-Regular", size: size)
-            ?? NSFont.systemFont(ofSize: size).fontDescriptor.withDesign(.serif).flatMap { NSFont(descriptor: $0, size: size) }
-            ?? .systemFont(ofSize: size)
+    static func systemSerif(_ size: CGFloat) -> NSFont {
+        NSFont.systemFont(ofSize: size).fontDescriptor.withDesign(.serif)
+            .flatMap { NSFont(descriptor: $0, size: size) } ?? .systemFont(ofSize: size)
     }
+
+    static func serif(_ size: CGFloat) -> NSFont {
+        style == .books ? systemSerif(size) : NSFont(name: "Charter-Roman", size: size) ?? systemSerif(size)
+    }
+
+    static func readingFont(_ size: CGFloat) -> NSFont {
+        style == .books ? systemSerif(size) : .systemFont(ofSize: size)
+    }
+
+    static let questionRole = NSAttributedString.Key("BookAsk.questionRole")
 
     static func paragraph(spacing: CGFloat = 4) -> NSParagraphStyle {
         let result = NSMutableParagraphStyle()
@@ -41,6 +73,29 @@ enum PaperTheme {
         result.lineSpacing = spacing
         result.paragraphSpacing = 2
         return result
+    }
+
+    static func readingParagraph(_ size: CGFloat) -> NSParagraphStyle {
+        guard style == .books else { return paragraph() }
+        let result = NSMutableParagraphStyle()
+        result.lineBreakMode = .byWordWrapping
+        result.minimumLineHeight = size * 1.28
+        result.maximumLineHeight = size * 1.28
+        result.hyphenationFactor = 1
+        result.paragraphSpacing = 2
+        return result
+    }
+
+    /// An empty paragraph is a small reading pause, not another full text line.
+    /// Preserve the actual answer string (including newlines) for selection/copy.
+    static func compactParagraphBreaks(_ text: NSMutableAttributedString) {
+        let gap = NSMutableParagraphStyle()
+        gap.minimumLineHeight = 10; gap.maximumLineHeight = 10
+        let pattern = try! NSRegularExpression(pattern: #"\n[ \t]*\n"#)
+        for match in pattern.matches(in: text.string, range: NSRange(location: 0, length: text.length)) {
+            text.addAttribute(.paragraphStyle, value: gap,
+                range: NSRange(location: match.range.location + 1, length: match.range.length - 1))
+        }
     }
 
     static func text(_ view: NSTextView, font: NSFont, inset: NSSize = NSSize(width: 8, height: 8)) {
@@ -56,7 +111,9 @@ enum PaperTheme {
 
     static func window(_ window: NSWindow) {
         apply(ReadingPreferences.appearance(), to: window)
-        window.backgroundColor = paper
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
         window.titlebarAppearsTransparent = true
     }
 
@@ -137,35 +194,82 @@ enum PaperTheme {
 }
 
 final class PaperCanvas: NSView {
+    var onLayout: ((CGFloat) -> Void)?
+    override func layout() { super.layout(); onLayout?(bounds.width) }
     private var texture: NSImage?
     private var textureSize = NSSize.zero
     private var textureDark: Bool?
-    override var isOpaque: Bool { true }
+    override var isOpaque: Bool { false }
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if point.y >= bounds.maxY - 62 { window?.performDrag(with: event) }
+        else { super.mouseDown(with: event) }
+    }
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        window?.invalidateShadow()
+    }
+    static func outline(_ rect: NSRect) -> NSBezierPath {
+        let x = rect.minX, y = rect.minY, w = rect.width, h = rect.height
+        if PaperTheme.style == .books { return NSBezierPath(roundedRect: rect, xRadius: 20, yRadius: 20) }
+        let tl: CGFloat = 20, tr: CGFloat = 46, br: CGFloat = 20, bl: CGFloat = 38
+        let k: CGFloat = 0.55228475
+        let p = NSBezierPath()
+        p.move(to: NSPoint(x: x + bl, y: y))
+        p.line(to: NSPoint(x: x + w - br, y: y))
+        p.curve(to: NSPoint(x: x + w, y: y + br), controlPoint1: NSPoint(x: x + w - br + k * br, y: y), controlPoint2: NSPoint(x: x + w, y: y + br - k * br))
+        p.line(to: NSPoint(x: x + w, y: y + h - tr))
+        p.curve(to: NSPoint(x: x + w - tr, y: y + h), controlPoint1: NSPoint(x: x + w, y: y + h - tr + k * tr), controlPoint2: NSPoint(x: x + w - tr + k * tr, y: y + h))
+        p.line(to: NSPoint(x: x + tl, y: y + h))
+        p.curve(to: NSPoint(x: x, y: y + h - tl), controlPoint1: NSPoint(x: x + tl - k * tl, y: y + h), controlPoint2: NSPoint(x: x, y: y + h - tl + k * tl))
+        p.line(to: NSPoint(x: x, y: y + bl))
+        p.curve(to: NSPoint(x: x + bl, y: y), controlPoint1: NSPoint(x: x, y: y + bl - k * bl), controlPoint2: NSPoint(x: x + bl - k * bl, y: y))
+        p.close(); return p
+    }
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         texture = nil; textureDark = nil; needsDisplay = true
     }
     override func draw(_ dirtyRect: NSRect) {
+        if PaperTheme.style == .books {
+            PaperTheme.paper.setFill(); Self.outline(bounds).fill(); return
+        }
         let dark = PaperTheme.isDark(effectiveAppearance)
         if texture == nil || textureSize != bounds.size || textureDark != dark {
             textureSize = bounds.size
             textureDark = dark
             let size = bounds.size
             // Resolve before caching so one theme's image cannot leak into another.
-            var base = NSColor.clear, grain = NSColor.clear
+            var base = NSColor.clear, grain = NSColor.clear, pigment = NSColor.clear
             effectiveAppearance.performAsCurrentDrawingAppearance {
                 base = PaperTheme.paper.usingColorSpace(.sRGB)!
                 grain = PaperTheme.ink.usingColorSpace(.sRGB)!
+                pigment = PaperTheme.sage.usingColorSpace(.sRGB)!
             }
             texture = NSImage(size: size, flipped: false) { rect in
                 base.setFill(); rect.fill()
+                // Sparse broad pigment deposits at the edges; the text axis
+                // stays quiet. Grain/fibers are a separate, finer scale.
+                for (top, width, height, opacity) in [(20.0, size.width * 1.2, 78.0, 0.04), (size.height * 0.58, size.width * 0.32, 105.0, 0.027), (size.height - 34, size.width, 66.0, 0.035)] {
+                    for i in 0..<70 {
+                        let t = CGFloat(i) / 70
+                        let mark = NSBezierPath()
+                        let y = size.height - top + (t - 0.5) * height
+                        let x = -40 + sin(t * .pi) * 16
+                        mark.move(to: NSPoint(x: x, y: y))
+                        mark.curve(to: NSPoint(x: x + width, y: y + 5), controlPoint1: NSPoint(x: width * 0.25, y: y - 12), controlPoint2: NSPoint(x: width * 0.7, y: y + 10))
+                        pigment.withAlphaComponent(CGFloat(opacity) * sin(t * CGFloat.pi)).setStroke()
+                        mark.lineWidth = 0.5 + CGFloat(i % 3) * 0.13; mark.stroke()
+                    }
+                }
                 var seed: UInt64 = 391
-                for _ in 0..<Int(size.width * size.height / (dark ? 14 : 50)) {
+                for _ in 0..<Int(size.width * size.height / (dark ? 10 : 20)) {
                     seed = seed &* 2862933555777941757 &+ 3037000493
                     let x = CGFloat((seed >> 24) % 10000) / 10000 * size.width
                     seed = seed &* 2862933555777941757 &+ 3037000493
                     let y = CGFloat((seed >> 24) % 10000) / 10000 * size.height
-                    grain.withAlphaComponent(dark ? 0.045 : 0.027).setFill()
+                    grain.withAlphaComponent(dark ? 0.02 + CGFloat(seed % 17) / 1000 : 0.022).setFill()
                     NSRect(x: x, y: y, width: 0.6, height: 0.6).fill()
                     if dark && seed % 17 == 0 {
                         grain.withAlphaComponent(0.024).setFill()
@@ -175,7 +279,10 @@ final class PaperCanvas: NSView {
                 return true
             }
         }
+        NSGraphicsContext.saveGraphicsState()
+        Self.outline(bounds).addClip()
         texture?.draw(in: bounds)
+        NSGraphicsContext.restoreGraphicsState()
     }
 }
 
@@ -187,11 +294,16 @@ final class PigmentWell: NSView {
     }
 }
 
+final class PaperRule: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        PaperTheme.line.withAlphaComponent(0.65).setFill(); bounds.fill()
+    }
+}
+
 final class PaperInputWell: NSView {
     override func draw(_ dirtyRect: NSRect) {
-        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 13, yRadius: 13)
-        PaperTheme.input.setFill(); path.fill()
-        PaperTheme.line.setStroke(); path.lineWidth = 1; path.stroke()
+        PaperTheme.line.withAlphaComponent(0.7).setFill()
+        NSRect(x: 0, y: bounds.maxY - 0.7, width: bounds.width, height: 0.7).fill()
     }
 }
 
@@ -200,7 +312,23 @@ final class PaperInputWell: NSView {
 final class PaperButton: NSButton {
     enum Kind { case toggle, quiet, primary }
     let kind: Kind
-    var symbol: String?
+    var symbolPointSize: CGFloat?
+    var symbolOpacity: CGFloat = 0.7
+    var circularHover = false
+    var toolbarSizing = false { didSet { invalidateIntrinsicContentSize() } }
+    var subduedUntilHover = false { didSet { needsDisplay = true } }
+    private var hovered = false
+    private var hoverArea: NSTrackingArea?
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
+        addTrackingArea(area); hoverArea = area
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
+    var foregroundColorOverride: NSColor? { didSet { needsDisplay = true } }
+    var symbol: String? { didSet { needsDisplay = true } }
     init(_ title: String, kind: Kind, symbol: String? = nil, target: AnyObject?, action: Selector?) {
         self.kind = kind; self.symbol = symbol
         super.init(frame: .zero)
@@ -215,26 +343,41 @@ final class PaperButton: NSButton {
     override var title: String { didSet { invalidateIntrinsicContentSize(); needsDisplay = true } }
     override var state: NSControl.StateValue { didSet { needsDisplay = true } }
     override var intrinsicContentSize: NSSize {
+        if toolbarSizing {
+            let width = (title as NSString).size(withAttributes: [.font: font ?? NSFont.systemFont(ofSize: 12)]).width
+            return NSSize(width: max(28, ceil(width) + (kind == .toggle ? 18 : 10)), height: 30)
+        }
+        if title.isEmpty { return NSSize(width: 28, height: 28) }
         let textWidth = (title as NSString).size(withAttributes: [.font: font ?? NSFont.systemFont(ofSize: 11)]).width
         return NSSize(width: ceil(textWidth) + (kind == .toggle || symbol != nil ? 36 : 24), height: 28)
     }
     override func draw(_ dirtyRect: NSRect) {
         let active = kind == .toggle && state == .on
         let rect = bounds.insetBy(dx: 1, dy: 2)
+        if circularHover && (hovered || isHighlighted) {
+            PaperTheme.blue.withAlphaComponent(0.14).setFill()
+            NSBezierPath(ovalIn: bounds.insetBy(dx: 1, dy: 1)).fill()
+        }
         if kind == .primary {
-            PaperTheme.wash(in: rect, color: PaperTheme.coral, opacity: isHighlighted ? 0.85 : 0.98)
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(ovalIn: bounds.insetBy(dx: 1, dy: 1)).addClip()
+            PaperTheme.sage.withAlphaComponent(isHighlighted ? 0.65 : 0.88).setFill(); bounds.fill()
+            if PaperTheme.style == .paper { PaperTheme.wash(in: bounds, color: PaperTheme.sage, opacity: 0.25) }
+            NSGraphicsContext.restoreGraphicsState()
         } else if active {
-            PaperTheme.wash(in: rect, color: PaperTheme.sage, opacity: isHighlighted ? 0.5 : 0.30)
-        } else if isHighlighted {
+            if isHighlighted { PaperTheme.wash(in: rect, color: PaperTheme.sage, opacity: 0.16) }
+        } else if isHighlighted || (toolbarSizing && hovered) {
             PaperTheme.wash(in: rect, color: PaperTheme.blue, opacity: 0.2)
         }
-        let foreground = kind == .primary ? PaperTheme.buttonInk : PaperTheme.ink
+        let focused = window?.firstResponder === self
+        let base = subduedUntilHover && !hovered && !isHighlighted && !focused ? PaperTheme.muted : PaperTheme.ink
+        let foreground = (foregroundColorOverride ?? (kind == .primary ? PaperTheme.buttonInk : base)).withAlphaComponent(isEnabled ? 1 : 0.35)
         let attributes: [NSAttributedString.Key: Any] = [.font: font ?? NSFont.systemFont(ofSize: 11), .foregroundColor: foreground]
         let textSize = (title as NSString).size(withAttributes: attributes)
-        let leading: CGFloat = (kind == .toggle || symbol != nil) ? 25 : (bounds.width - textSize.width) / 2
+        let leading: CGFloat = kind == .toggle ? (toolbarSizing ? 18 : 25) : (symbol != nil && !title.isEmpty) ? 25 : (bounds.width - textSize.width) / 2
         (title as NSString).draw(at: NSPoint(x: leading, y: (bounds.height - textSize.height) / 2), withAttributes: attributes)
         if kind == .toggle {
-            let box = NSRect(x: 9, y: (bounds.height - 10) / 2, width: 10, height: 10)
+            let box = NSRect(x: toolbarSizing ? 4 : 9, y: (bounds.height - 10) / 2, width: 10, height: 10)
             let outline = NSBezierPath(roundedRect: box, xRadius: 3, yRadius: 3)
             if active { PaperTheme.ink.withAlphaComponent(0.75).setFill(); outline.fill() }
             else { PaperTheme.muted.withAlphaComponent(0.55).setStroke(); outline.lineWidth = 1; outline.stroke() }
@@ -246,9 +389,10 @@ final class PaperButton: NSButton {
                 PaperTheme.paper.setStroke(); tick.lineWidth = 1.1; tick.stroke()
             }
         } else if let symbol, let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(paletteColors: [PaperTheme.ink])) {
-            let iconRect = NSRect(x: 8, y: (bounds.height - 12) / 2, width: 12, height: 12)
-            image.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 0.7, respectFlipped: true, hints: nil)
+            .withSymbolConfiguration(.init(paletteColors: [foreground])) {
+            let iconSize: CGFloat = symbolPointSize ?? (toolbarSizing ? 15 : 12)
+            let iconRect = NSRect(x: title.isEmpty ? (bounds.width - iconSize) / 2 : 8, y: (bounds.height - iconSize) / 2, width: iconSize, height: iconSize)
+            image.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: symbolOpacity, respectFlipped: true, hints: nil)
         }
     }
     override var focusRingMaskBounds: NSRect { bounds.insetBy(dx: 1, dy: 1) }
@@ -260,6 +404,7 @@ final class PaperButton: NSButton {
 final class PaperTableRow: NSTableRowView {
     override func drawSelection(in dirtyRect: NSRect) {
         guard isSelected else { return }
-        PaperTheme.wash(in: bounds.insetBy(dx: 3, dy: 2), color: PaperTheme.blue, opacity: 0.23)
+        PaperTheme.sage.withAlphaComponent(0.09).setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 2), xRadius: 8, yRadius: 8).fill()
     }
 }

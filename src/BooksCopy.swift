@@ -6,6 +6,13 @@ import ApplicationServices
 /// a ⌘C event targeted at the Books PID is used only when no usable menu
 /// item exists. Both paths share the single system pasteboard.
 enum BooksCopy {
+    // Only our own targeted copy fallback is exempt from dismissal monitoring.
+    // A physical user key, including Command-C, still invalidates stale intent.
+    static let copyEventTag: Int64 = 0x424F4F4B41534B
+    static func isOwnCopyEvent(_ event: NSEvent) -> Bool {
+        event.keyCode == 8 && event.modifierFlags.contains(.command)
+            && event.cgEvent?.getIntegerValueField(.eventSourceUserData) == copyEventTag
+    }
     enum Method: String {
         case none, menu, shortcut
     }
@@ -68,6 +75,8 @@ enum BooksCopy {
               let up = CGEvent(keyboardEventSource: source, virtualKey: 8, keyDown: false) else { return false }
         down.flags = .maskCommand
         up.flags = .maskCommand
+        down.setIntegerValueField(.eventSourceUserData, value: copyEventTag)
+        up.setIntegerValueField(.eventSourceUserData, value: copyEventTag)
         down.postToPid(pid)
         up.postToPid(pid)
         return true

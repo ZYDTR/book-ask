@@ -3,16 +3,24 @@
 import json
 import time
 import urllib.request
+import argparse
 from pathlib import Path
 
-config = json.loads((Path.home() / ".config/book-ask/config.json").read_text())
-key = json.loads(Path(config["authFile"]).read_text())[config["authProvider"]]["key"]
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--config", type=Path, default=Path.home() / ".config/book-ask/config.json")
+parser.add_argument("--output", type=Path, default=Path(__file__).parents[1] / "evidence/api_smoke.json")
+args = parser.parse_args()
+config = json.loads(args.config.read_text())
+key = config.get("apiKey") or json.loads(Path(config["authFile"]).read_text())[config["authProvider"]]["key"]
 payload = {"model": config["model"], "stream": True, "max_tokens": 1800, "messages": [
     {"role": "user", "content": "请用中文简短解释英语 you're liable to 的常见意思，并给一个例句。"}]}
+if config.get("thinkingLevel"):
+    payload["extra_body"] = {"google": {"thinking_config": {"thinking_level": config["thinkingLevel"]}}}
 request = urllib.request.Request(config["baseURL"] + "/chat/completions", method="POST",
     headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
     data=json.dumps(payload).encode())
-opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+# Respect the user's network settings, as the native URLSession does.
+opener = urllib.request.build_opener()
 started = time.monotonic()
 answer = ""
 first = None
@@ -33,11 +41,12 @@ with opener.open(request, timeout=90) as response:
         if delta and first is None:
             first = time.monotonic() - started
         answer += delta
-result = {"test": "api_smoke_only_not_ui_e2e", "model": config["model"], "firstContentSeconds": first,
+result = {"test": "api_smoke_only_not_ui_e2e", "model": config["model"], "thinkingLevel": config.get("thinkingLevel"), "firstContentSeconds": first,
           "elapsedSeconds": time.monotonic() - started, "done": done, "answer": answer}
-output = Path(__file__).parents[1] / "evidence/api_smoke.json"
-output.parent.mkdir(exist_ok=True)
-output.write_text(json.dumps(result, ensure_ascii=False, indent=2))
+output = args.output
+output.parent.mkdir(parents=True, exist_ok=True)
+serialized = json.dumps(result, ensure_ascii=False, indent=2).replace(key, "[REDACTED]")
+output.write_text(serialized)
 if not answer or not done:
     raise SystemExit("No complete content stream was returned")
-print(json.dumps(result, ensure_ascii=False, indent=2))
+print(serialized)

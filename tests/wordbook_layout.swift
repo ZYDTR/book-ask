@@ -1,28 +1,31 @@
 import AppKit
 
-// Offscreen real AppKit layout: the original replacement content view collapsed
-// to 59pt despite a 588pt window, leaving the list and detail at 1pt high.
 @main struct WordbookLayoutTests {
     @MainActor static func main() {
         _ = NSApplication.shared
-        let controller = WordbookWindow(fallbackBook: "Book")
-        let window = controller.window!
-        for width in [800, 640, 1000] {
-            window.setContentSize(NSSize(width: width, height: 560))
-            let content = window.contentView!
+        let content = WordbookView(fallbackBook: "Book")
+        let window = NSWindow(contentRect: NSRect(x: -20000, y: -20000, width: 500, height: 511),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = content
+        for width in [360, 500, 640, 900, 500] {
+            let height = width == 360 ? 340.0 : 511.0
+            window.setContentSize(NSSize(width: Double(width), height: height))
             content.layoutSubtreeIfNeeded()
-            precondition(abs(content.frame.height - 560) < 1, "Wordbook content must fill the window")
+            precondition(abs(content.frame.height - height) < 1, "Wordbook page must fill the existing window")
             let scrolls = content.subviews.compactMap { $0 as? NSScrollView }
-            precondition(scrolls.count == 2 && scrolls.allSatisfy { $0.frame.height > 400 }, "List and explanation must remain visible")
+            precondition(scrolls.count == 2 && scrolls.allSatisfy { $0.frame.height > (width == 360 ? 144 : 315) }, "wordbook scroll frames at \(width): \(scrolls.map { NSStringFromRect($0.frame) })")
+            precondition(!content.isShowingDetail, "initial page is the term list")
             for scroll in scrolls {
                 precondition(!scroll.hasHorizontalScroller)
                 if let text = scroll.documentView as? NSTextView {
-                    text.string = String(repeating: "A lengthy explanation that must wrap naturally. ", count: 60)
+                    text.string = String(repeating: "A lengthy explanation that must wrap naturally. 中文释义 ", count: 60)
                     text.layoutManager?.ensureLayout(for: text.textContainer!)
                     precondition(abs(text.frame.width - scroll.contentSize.width) < 1)
+                    let shifted = scroll.contentView.constrainBoundsRect(NSRect(x: 100, y: 0, width: scroll.contentSize.width, height: scroll.contentSize.height))
+                    precondition(abs(shifted.minX) < 1, "detail cannot scroll horizontally")
                 }
             }
         }
-        print("PASS: wordbook window content fills its frame at 640/800/1000pt; text wraps")
+        print("PASS: same-window wordbook page fills 360/500/640/900pt; list/detail stay readable and text wraps")
     }
 }
